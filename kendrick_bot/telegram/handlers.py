@@ -16,6 +16,7 @@ from telegram.ext import ContextTypes
 from kendrick_bot.llm.ollama import OllamaClient, OllamaError
 from kendrick_bot.shopping.forecast import StockForecast, forecast_stock
 from kendrick_bot.shopping.pantry_store import (
+    PantryInsufficientStock,
     PantryInvalidQuantity,
     PantryItemNotFound,
     PantryStore,
@@ -40,9 +41,11 @@ HELP_TEXT = (
     "/despensa — ver seus itens e estoques.\n"
     "/estoque <item> <quantidade> <unidade> — atualizar estoque.\n"
     "/consumo <item> <quantidade> <unidade>/dia — definir consumo.\n"
+    "/usei <item> <quantidade> — registrar consumo da despensa.\n"
     "/remover_despensa <item> confirmar — remover um item.\n\n"
     "🛒 COMPRAS\n"
     "/planejar <dias> — prever o que pode faltar.\n"
+    "/prioridades — ver o que deve acabar primeiro.\n"
     "/lista — ver sua lista de compras.\n"
     "/comprado <item> <quantidade> — registrar uma compra.\n"
     "/historico [dias] — consultar compras (padrão: 30 dias).\n\n"
@@ -131,6 +134,117 @@ async def show_pantry(
         )
     await update.message.reply_text(
         "🧺 Sua despensa\n\n" + "\n".join(lines)
+    )
+
+
+async def show_pantry_priorities(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    if update.message is None:
+        return
+
+    user = update.effective_user
+    if user is None:
+        raise RuntimeError("Não foi possível identificar o usuário da mensagem.")
+    store: PantryStore = context.bot_data[PANTRY_STORE_KEY]
+    pantry_items = store.get_items(user.id)
+    if not pantry_items:
+        await update.message.reply_text(
+            "Sua despensa ainda não tem itens cadastrados. "
+            "Use /estoque para começar."
+        )
+        return
+
+    items_with_consumption = sorted(
+        (
+            (item.quantity / item.daily_consumption, item)
+            for item in pantry_items
+            if item.daily_consumption is not None
+        ),
+        key=lambda entry: (entry[0], entry[1].name.casefold()),
+    )
+    items_without_consumption = [
+        item for item in pantry_items if item.daily_consumption is None
+    ]
+
+    lines = ["⏳ O que deve acabar primeiro"]
+    if items_with_consumption:
+        for days, item in items_with_consumption:
+            formatted_days = _format_days(days)
+            day_unit = (
+                "dia" if formatted_days in {"1", "<0.1"} else "dias"
+            )
+            lines.append(
+                f"• {item.name} — {formatted_days} {day_unit} "
+                f"({_format_quantity(item.quantity)} {item.unit})"
+            )
+    else:
+        lines.append("Ainda não há itens com consumo diário cadastrado.")
+
+    if items_without_consumption:
+        lines.append("\nℹ️ Sem previsão de duração")
+        lines.extend(
+            f"• {item.name} — {_format_quantity(item.quantity)} {item.unit}; "
+            "cadastre com /consumo"
+            for item in items_without_consumption
+        )
+
+    await update.message.reply_text("\n".join(lines))
+
+
+async def record_pantry_consumption(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    if update.message is None:
+        return
+
+    if len(context.args) < 2:
+        await update.message.reply_text(
+            "Use /usei <item> <quantidade>. "
+            "Exemplo: /usei arroz integral 0,2"
+        )
+        return
+    item_name = " ".join(context.args[:-1]).strip()
+    quantity = _parse_decimal(context.args[-1])
+    if not _valid_pantry_name(item_name) or quantity is None or quantity <= 0:
+        await update.message.reply_text(
+            "Informe um item e uma quantidade maior que zero. "
+            "Exemplo: /usei arroz integral 0,2"
+        )
+        return
+
+    user = update.effective_user
+    if user is None:
+        raise RuntimeError("Não foi possível identificar o usuário da mensagem.")
+    store: PantryStore = context.bot_data[PANTRY_STORE_KEY]
+    try:
+        item = store.consume_stock(user.id, item_name, quantity)
+    except PantryItemNotFound:
+        await update.message.reply_text(
+            f"{item_name} não está cadastrado na despensa. "
+            "Cadastre-o primeiro com /estoque."
+        )
+        return
+    except PantryInvalidQuantity:
+        await update.message.reply_text(
+            "Quantidade inválida. Use um número maior que zero, com no máximo "
+            "seis casas decimais."
+        )
+        return
+    except PantryInsufficientStock as error:
+        await update.message.reply_text(
+            "Não registrei o consumo: há apenas "
+            f"{_format_quantity(error.available_quantity)} "
+            f"{error.unit} disponível."
+        )
+        return
+
+    await update.message.reply_text(
+        f"✅ Registrei {_format_quantity(quantity)} {item.unit} usados de "
+        f"{item.name}.\nEstoque restante: {_format_quantity(item.quantity)} "
+        f"{item.unit}."
     )
 
 
@@ -919,6 +1033,13 @@ def _format_forecast(
 
 def _format_quantity(quantity: Decimal) -> str:
     return format(quantity.normalize(), "f")
+
+
+def _format_days(days: Decimal) -> str:
+    if days > 0 and days < Decimal("0.1"):
+        return "<0.1"
+    rounded_days = days.quantize(Decimal("0.1"))
+    return format(rounded_days.normalize(), "f")
 
 
 def _normalize_answer(answer: str) -> str:

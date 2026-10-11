@@ -51,7 +51,14 @@ espaços e o estoque pode ser zero. Registre o consumo habitual diário com
 despensa. A unidade do consumo deve corresponder à unidade do estoque.
 
 Use `/despensa` para consultar os itens, estoque e consumo cadastrado. Use
-`/remover_despensa <item> confirmar` para excluir um registro após confirmação;
+`/prioridades` para ordenar os itens com consumo conhecido pelo tempo estimado
+até o estoque acabar; itens sem consumo ficam em uma seção separada. Registre
+uma retirada com `/usei <item> <quantidade>`, por exemplo
+`/usei arroz integral 0,2`. O comando usa a unidade cadastrada na despensa,
+atualiza o estoque imediatamente e não permite retirar mais do que há disponível.
+Um estoque zerado permanece cadastrado para que você possa atualizá-lo depois
+com `/estoque`. Use `/remover_despensa <item> confirmar` para excluir um
+registro após confirmação;
 isso não remove nem altera o item correspondente na lista de compras. Para
 trocar a unidade de um item, remova-o da despensa e cadastre-o novamente,
 incluindo o consumo habitual.

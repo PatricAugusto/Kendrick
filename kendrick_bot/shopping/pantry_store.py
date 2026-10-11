@@ -25,6 +25,13 @@ class PantryInvalidQuantity(ValueError):
     pass
 
 
+class PantryInsufficientStock(ValueError):
+    def __init__(self, available_quantity: Decimal, unit: str) -> None:
+        super().__init__()
+        self.available_quantity = available_quantity
+        self.unit = unit
+
+
 class PantryStore:
     def __init__(self, database_path: str | Path | None = None) -> None:
         self.database_path = (
@@ -180,6 +187,58 @@ class PantryStore:
             quantity=Decimal(quantity),
             unit=saved_unit,
             daily_consumption=daily_consumption,
+        )
+
+    def consume_stock(
+        self,
+        user_id: int,
+        name: str,
+        quantity: Decimal,
+    ) -> PantryItem:
+        self._validate_user_id(user_id)
+        self._validate_item(name)
+        self._validate_quantity(quantity, allow_zero=False)
+        item_key = name.strip().casefold()
+
+        with closing(sqlite3.connect(self.database_path)) as connection:
+            with connection:
+                connection.execute("BEGIN IMMEDIATE")
+                row = connection.execute(
+                    """
+                    SELECT name, quantity, unit, daily_consumption
+                    FROM pantry
+                    WHERE user_id = ? AND item_key = ?
+                    """,
+                    (user_id, item_key),
+                ).fetchone()
+                if row is None:
+                    raise PantryItemNotFound
+
+                item_name, current_quantity, unit, daily_consumption = row
+                remaining_quantity = Decimal(current_quantity) - quantity
+                if remaining_quantity < 0:
+                    raise PantryInsufficientStock(
+                        Decimal(current_quantity),
+                        unit,
+                    )
+                connection.execute(
+                    """
+                    UPDATE pantry
+                    SET quantity = ?
+                    WHERE user_id = ? AND item_key = ?
+                    """,
+                    (str(remaining_quantity), user_id, item_key),
+                )
+
+        return PantryItem(
+            name=item_name,
+            quantity=remaining_quantity,
+            unit=unit,
+            daily_consumption=(
+                Decimal(daily_consumption)
+                if daily_consumption is not None
+                else None
+            ),
         )
 
     def remove_item(self, user_id: int, name: str) -> bool:

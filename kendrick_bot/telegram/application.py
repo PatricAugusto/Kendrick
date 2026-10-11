@@ -22,6 +22,7 @@ from kendrick_bot.telegram.handlers import (
     cancel_item_check,
     mark_item_purchased,
     plan_purchases,
+    record_pantry_consumption,
     remove_pantry_item,
     set_pantry_consumption,
     set_pantry_stock,
@@ -29,6 +30,7 @@ from kendrick_bot.telegram.handlers import (
     show_help,
     show_list,
     show_pantry,
+    show_pantry_priorities,
     handle_confirmation_callback,
     start,
 )
@@ -67,10 +69,20 @@ def build_application(settings: Settings) -> Application:
         CommandHandler("despensa", show_pantry, filters=authorized_user)
     )
     application.add_handler(
+        CommandHandler("prioridades", show_pantry_priorities, filters=authorized_user)
+    )
+    application.add_handler(
         CommandHandler("estoque", set_pantry_stock, filters=authorized_user)
     )
     application.add_handler(
         CommandHandler("consumo", set_pantry_consumption, filters=authorized_user)
+    )
+    application.add_handler(
+        CommandHandler(
+            "usei",
+            record_pantry_consumption,
+            filters=authorized_user,
+        )
     )
     application.add_handler(
         CommandHandler(

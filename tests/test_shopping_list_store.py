@@ -12,6 +12,7 @@ from kendrick_bot.shopping.list_store import (
     ShoppingListStore,
 )
 from kendrick_bot.shopping.pantry_store import (
+    PantryInsufficientStock,
     PantryInvalidQuantity,
     PantryItem,
     PantryItemNotFound,
@@ -323,6 +324,66 @@ def test_pantry_requires_existing_item_before_setting_consumption(tmp_path) -> N
 
     with pytest.raises(PantryItemNotFound):
         store.set_daily_consumption(123, "arroz", Decimal("0.1"), "kg")
+
+
+def test_pantry_consumption_decreases_stock_and_preserves_consumption(tmp_path) -> None:
+    store = PantryStore(tmp_path / "kendrick.sqlite3")
+    store.set_stock(123, "arroz", Decimal("2.5"), "kg")
+    store.set_daily_consumption(123, "arroz", Decimal("0.1"), "kg")
+
+    updated_item = store.consume_stock(123, "ARROZ", Decimal("0.5"))
+
+    assert updated_item == PantryItem(
+        name="arroz",
+        quantity=Decimal("2.0"),
+        unit="kg",
+        daily_consumption=Decimal("0.1"),
+    )
+    assert store.get_items(123) == [updated_item]
+
+
+def test_pantry_consumption_allows_zero_stock_without_removing_item(tmp_path) -> None:
+    store = PantryStore(tmp_path / "kendrick.sqlite3")
+    store.set_stock(123, "arroz", Decimal("1"), "kg")
+
+    updated_item = store.consume_stock(123, "arroz", Decimal("1"))
+
+    assert updated_item.quantity == Decimal("0")
+    assert store.get_items(123) == [updated_item]
+
+
+def test_pantry_consumption_rejects_overdraw_without_changing_stock(tmp_path) -> None:
+    store = PantryStore(tmp_path / "kendrick.sqlite3")
+    store.set_stock(123, "arroz", Decimal("1"), "kg")
+
+    with pytest.raises(PantryInsufficientStock) as error:
+        store.consume_stock(123, "arroz", Decimal("1.1"))
+
+    assert error.value.available_quantity == Decimal("1")
+    assert store.get_items(123)[0].quantity == Decimal("1")
+
+
+def test_pantry_consumption_is_isolated_per_user(tmp_path) -> None:
+    store = PantryStore(tmp_path / "kendrick.sqlite3")
+    store.set_stock(123, "arroz", Decimal("2"), "kg")
+    store.set_stock(456, "arroz", Decimal("5"), "kg")
+
+    store.consume_stock(123, "arroz", Decimal("1"))
+
+    assert store.get_items(123)[0].quantity == Decimal("1")
+    assert store.get_items(456)[0].quantity == Decimal("5")
+
+
+def test_pantry_consumption_requires_existing_item_and_positive_amount(
+    tmp_path,
+) -> None:
+    store = PantryStore(tmp_path / "kendrick.sqlite3")
+
+    with pytest.raises(PantryItemNotFound):
+        store.consume_stock(123, "arroz", Decimal("1"))
+    store.set_stock(123, "arroz", Decimal("2"), "kg")
+    with pytest.raises(PantryInvalidQuantity):
+        store.consume_stock(123, "arroz", Decimal("0"))
 
 
 @pytest.mark.parametrize(
