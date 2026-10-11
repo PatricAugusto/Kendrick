@@ -15,6 +15,7 @@ from kendrick_bot.telegram.handlers import (
     answer_item_check,
     cancel_item_check,
     mark_item_purchased,
+    show_help,
     show_list,
     start,
 )
@@ -55,6 +56,7 @@ def test_build_application_registers_start_handler() -> None:
         if isinstance(handler, CommandHandler)
     }
     assert command_handlers["start"].callback is start
+    assert command_handlers["ajuda"].callback is show_help
     assert command_handlers["lista"].callback is show_list
     assert command_handlers["comprado"].callback is mark_item_purchased
     assert command_handlers["cancelar"].callback is cancel_item_check

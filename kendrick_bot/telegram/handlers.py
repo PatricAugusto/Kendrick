@@ -15,6 +15,19 @@ from kendrick_bot.shopping.list_store import (
 
 PENDING_ANALYSIS_KEY = "pending_stock_analysis"
 SHOPPING_STORE_KEY = "shopping_list_store"
+HELP_TEXT = (
+    "Comandos disponíveis:\n"
+    "/start — ver a saudação e esta ajuda.\n"
+    "/ajuda — consultar os comandos e como usar o Kendrick.\n"
+    "/lista — consultar os itens e as quantidades para comprar.\n"
+    "/comprado <item> <quantidade> — registrar o que já foi comprado.\n"
+    "/cancelar — interromper a análise em andamento.\n\n"
+    "Para analisar um item, envie o nome dele. Vou perguntar a quantidade "
+    "em estoque, o consumo diário e em quantos dias será a próxima compra. "
+    "Se houver falta, posso adicionar à lista após sua confirmação.\n\n"
+    "No /comprado, informe um item que já esteja na lista e a quantidade "
+    "comprada. Quantidades decimais podem usar vírgula."
+)
 
 
 @dataclass
@@ -33,14 +46,15 @@ async def start(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
 
     await update.message.reply_text(
         "Olá! Eu sou o Kendrick, seu assistente para organizar as compras.\n\n"
-        "Comandos disponíveis:\n"
-        "/start — ver esta mensagem de ajuda.\n"
-        "/lista — consultar os itens e as quantidades para comprar.\n"
-        "/comprado <item> <quantidade> — registrar o que já foi comprado.\n"
-        "/cancelar — interromper a análise em andamento.\n\n"
-        "Para começar, envie o nome de um item. Vou perguntar a quantidade "
-        "em estoque, o consumo diário e em quantos dias será a próxima compra."
+        + HELP_TEXT
     )
+
+
+async def show_help(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.message is None:
+        return
+
+    await update.message.reply_text(HELP_TEXT)
 
 
 async def answer_item_check(

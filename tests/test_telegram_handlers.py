@@ -10,6 +10,7 @@ from kendrick_bot.telegram.handlers import (
     answer_item_check,
     cancel_item_check,
     mark_item_purchased,
+    show_help,
     show_list,
     start,
 )
@@ -25,10 +26,32 @@ def test_start_greets_and_lists_available_commands() -> None:
     assert response.startswith("Olá!")
     assert "Comandos disponíveis:" in response
     assert "/start —" in response
+    assert "/ajuda —" in response
     assert "/lista —" in response
     assert "/comprado <item> <quantidade> —" in response
     assert "/cancelar —" in response
     assert "consumo diário" in response
+
+
+def test_help_lists_commands_and_usage() -> None:
+    update, reply_text = make_update("/ajuda")
+
+    asyncio.run(show_help(update, Mock()))
+
+    reply_text.assert_awaited_once()
+    response = reply_text.await_args.args[0]
+    assert "Comandos disponíveis:" in response
+    assert "/ajuda —" in response
+    assert "/lista —" in response
+    assert "/comprado <item> <quantidade> —" in response
+    assert "/cancelar —" in response
+    assert "Se houver falta" in response
+
+
+def test_help_does_not_reply_when_update_has_no_message() -> None:
+    update = Mock(message=None)
+
+    assert asyncio.run(show_help(update, Mock())) is None
 
 
 def test_start_does_not_reply_when_update_has_no_message() -> None:

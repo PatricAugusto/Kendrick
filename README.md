@@ -30,7 +30,8 @@ quando não houver saldo restante. Não é possível registrar uma quantidade ma
 que a da lista. Use `/cancelar` para interromper uma análise.
 
 Ao executar `/start`, o Kendrick envia uma saudação com a lista de comandos
-disponíveis e uma instrução para iniciar uma análise.
+disponíveis e uma instrução para iniciar uma análise. Use `/ajuda` para
+consultar novamente os comandos e as instruções de uso.
 
 A análise em andamento fica somente na memória do processo e é apagada quando o
 bot é reiniciado. A lista de compras é salva localmente no arquivo

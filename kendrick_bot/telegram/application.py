@@ -14,6 +14,7 @@ from kendrick_bot.telegram.handlers import (
     answer_item_check,
     cancel_item_check,
     mark_item_purchased,
+    show_help,
     show_list,
     start,
 )
@@ -33,6 +34,9 @@ def build_application(settings: Settings) -> Application:
         group=-1,
     )
     application.add_handler(CommandHandler("start", start, filters=authorized_user))
+    application.add_handler(
+        CommandHandler("ajuda", show_help, filters=authorized_user)
+    )
     application.add_handler(
         CommandHandler("lista", show_list, filters=authorized_user)
     )
