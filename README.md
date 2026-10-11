@@ -25,6 +25,9 @@ Se houver falta, pede confirmação antes de adicionar essa quantidade à lista.
 Use `/lista` para consultar os itens e quantidades, ou `/cancelar` para
 interromper uma análise.
 
+Ao executar `/start`, o Kendrick envia uma saudação com a lista de comandos
+disponíveis e uma instrução para iniciar uma análise.
+
 As análises e a lista ficam somente na memória do processo e são apagadas quando
 o bot é reiniciado.
 

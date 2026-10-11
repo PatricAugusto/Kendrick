@@ -33,10 +33,13 @@ async def start(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     await update.message.reply_text(
-        "Olá! Envie o nome de um item para analisar seu estoque. "
-        "Vou perguntar a quantidade atual, o consumo diário e em quantos dias "
-        "será a próxima compra. Use /lista para consultar a lista ou /cancelar "
-        "para interromper a análise."
+        "Olá! Eu sou o Kendrick, seu assistente para organizar as compras.\n\n"
+        "Comandos disponíveis:\n"
+        "/start — ver esta mensagem de ajuda.\n"
+        "/lista — consultar os itens e as quantidades para comprar.\n"
+        "/cancelar — interromper a análise em andamento.\n\n"
+        "Para começar, envie o nome de um item. Vou perguntar a quantidade "
+        "em estoque, o consumo diário e em quantos dias será a próxima compra."
     )
 
 

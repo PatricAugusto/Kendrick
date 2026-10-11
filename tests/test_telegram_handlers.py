@@ -14,13 +14,19 @@ from kendrick_bot.telegram.handlers import (
 )
 
 
-def test_start_explains_stock_analysis_flow() -> None:
+def test_start_greets_and_lists_available_commands() -> None:
     update, reply_text = make_update("/start")
 
     asyncio.run(start(update, Mock()))
 
     reply_text.assert_awaited_once()
-    assert "consumo diário" in reply_text.await_args.args[0]
+    response = reply_text.await_args.args[0]
+    assert response.startswith("Olá!")
+    assert "Comandos disponíveis:" in response
+    assert "/start —" in response
+    assert "/lista —" in response
+    assert "/cancelar —" in response
+    assert "consumo diário" in response
 
 
 def test_start_does_not_reply_when_update_has_no_message() -> None:
