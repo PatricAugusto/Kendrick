@@ -54,8 +54,25 @@ isso não remove nem altera o item correspondente na lista de compras. Para
 trocar a unidade de um item, remova-o da despensa e cadastre-o novamente,
 incluindo o consumo habitual.
 Esses registros são persistidos no banco local e isolados por usuário do
-Telegram. Eles ainda não preenchem automaticamente a análise de estoque nem
-alteram a lista de compras.
+Telegram.
+
+## Planejar idas ao mercado e consultar compras
+
+Use `/planejar <dias>` (de 1 a 365) para estimar quais itens cadastrados devem
+faltar dentro do período, considerando estoque e consumo diário. O Kendrick
+mostra os itens sem consumo cadastrado, mas não inventa uma estimativa para
+eles. As faltas sugeridas só entram na lista depois de uma confirmação Sim;
+responder Não ou usar `/cancelar` não altera a lista. Os itens planejados levam
+a unidade da despensa para a lista, e quantidades com unidade incompatível não
+são somadas.
+
+Use `/historico` para ver as até 20 compras mais recentes marcadas nos últimos
+30 dias, ou `/historico <dias>` para escolher um período de 1 a 365 dias. O
+registro é criado quando `/comprado <item> <quantidade>` desconta com sucesso
+um item da lista; tentativas inválidas não entram no histórico. Data e horário
+são apresentados em UTC. Para que o estoque atual reflita a compra, atualize-o
+separadamente com `/estoque <item> <quantidade> <unidade>`; marcar como comprado
+não altera automaticamente a despensa.
 
 Instale o Ollama na máquina que executa o bot, inicie o serviço e baixe um
 modelo, por exemplo, no PowerShell:

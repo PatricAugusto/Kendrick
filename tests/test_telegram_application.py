@@ -20,12 +20,14 @@ from kendrick_bot.telegram.handlers import (
     ask_assistant,
     cancel_item_check,
     mark_item_purchased,
+    plan_purchases,
     remove_pantry_item,
     set_pantry_consumption,
     set_pantry_stock,
     show_help,
     show_list,
     show_pantry,
+    show_purchase_history,
     start,
 )
 
@@ -83,6 +85,8 @@ def test_build_application_registers_start_handler() -> None:
     assert command_handlers["consumo"].callback is set_pantry_consumption
     assert command_handlers["remover_despensa"].callback is remove_pantry_item
     assert command_handlers["comprado"].callback is mark_item_purchased
+    assert command_handlers["planejar"].callback is plan_purchases
+    assert command_handlers["historico"].callback is show_purchase_history
     assert command_handlers["cancelar"].callback is cancel_item_check
 
     message_handlers = [handler for handler in handlers if isinstance(handler, MessageHandler)]

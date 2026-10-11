@@ -1,26 +1,35 @@
 import asyncio
+from datetime import datetime, timezone
 from decimal import Decimal
 from unittest.mock import AsyncMock, Mock
 
 from kendrick_bot.llm.ollama import OllamaError
 from kendrick_bot.shopping.pantry_store import PantryItem
+from kendrick_bot.shopping.list_store import PurchaseRecord, ShoppingListUnitMismatch
+from kendrick_bot.shopping.pantry_store import PantryStore
+from kendrick_bot.shopping.list_store import ShoppingListStore
 from kendrick_bot.telegram.handlers import (
     OLLAMA_CLIENT_KEY,
     PANTRY_STORE_KEY,
     PENDING_ANALYSIS_KEY,
     SHOPPING_STORE_KEY,
     PendingAnalysis,
+    PendingPurchasePlan,
+    PlannedShortage,
     ShoppingListItem,
     answer_item_check,
     ask_assistant,
     cancel_item_check,
     mark_item_purchased,
+    PENDING_PLAN_KEY,
+    plan_purchases,
     remove_pantry_item,
     set_pantry_consumption,
     set_pantry_stock,
     show_help,
     show_list,
     show_pantry,
+    show_purchase_history,
     start,
 )
 
@@ -43,6 +52,8 @@ def test_start_greets_and_lists_available_commands() -> None:
     assert "/estoque <item> <quantidade> <unidade> —" in response
     assert "/consumo <item> <quantidade> <unidade>/dia —" in response
     assert "/remover_despensa <item> confirmar —" in response
+    assert "/planejar <dias> —" in response
+    assert "/historico [dias] —" in response
     assert "/cancelar —" in response
     assert "consumo diário" in response
 
@@ -63,6 +74,8 @@ def test_help_lists_commands_and_usage() -> None:
     assert "/estoque <item> <quantidade> <unidade> —" in response
     assert "/consumo <item> <quantidade> <unidade>/dia —" in response
     assert "/remover_despensa <item> confirmar —" in response
+    assert "/planejar <dias> —" in response
+    assert "/historico [dias] —" in response
     assert "/cancelar —" in response
     assert "Se houver falta" in response
 
@@ -100,6 +113,260 @@ def make_pantry_context(store: Mock, args: list[str]) -> Mock:
         args=args,
     )
 
+
+def make_plan_context(pantry: Mock, shopping: Mock, args: list[str]) -> Mock:
+    return Mock(
+        user_data={},
+        bot_data={
+            PANTRY_STORE_KEY: pantry,
+            SHOPPING_STORE_KEY: shopping,
+        },
+        args=args,
+    )
+
+
+def test_plan_purchases_shows_shortages_and_requires_confirmation() -> None:
+    pantry = Mock()
+    pantry.get_items.return_value = [
+        PantryItem("arroz", Decimal("0.5"), "kg", Decimal("0.1")),
+        PantryItem("leite", Decimal("2"), "L", Decimal("0.1")),
+        PantryItem("sal", Decimal("1"), "kg", None),
+    ]
+    shopping = Mock()
+    context = make_plan_context(pantry, shopping, ["10"])
+    update, reply_text = make_update("/planejar 10")
+
+    asyncio.run(plan_purchases(update, context))
+
+    response = reply_text.await_args.args[0]
+    assert "Repor arroz: 0.5 kg" in response
+    assert "Estoque suficiente: leite" in response
+    assert "Sem consumo cadastrado: sal" in response
+    assert "Responda Sim ou Não" in response
+    assert isinstance(context.user_data[PENDING_PLAN_KEY], PendingPurchasePlan)
+    shopping.add_quantities.assert_not_called()
+
+
+def test_plan_purchases_reports_when_no_restock_is_needed() -> None:
+    pantry = Mock()
+    pantry.get_items.return_value = [
+        PantryItem("arroz", Decimal("5"), "kg", Decimal("0.1"))
+    ]
+    shopping = Mock()
+    context = make_plan_context(pantry, shopping, ["7"])
+    update, reply_text = make_update("/planejar 7")
+
+    asyncio.run(plan_purchases(update, context))
+
+    reply_text.assert_awaited_once()
+    assert "Nenhuma reposição necessária" in reply_text.await_args.args[0]
+    assert PENDING_PLAN_KEY not in context.user_data
+
+
+def test_plan_purchases_requires_valid_horizon() -> None:
+    pantry = Mock()
+    shopping = Mock()
+    context = make_plan_context(pantry, shopping, ["366"])
+    update, reply_text = make_update("/planejar 366")
+
+    asyncio.run(plan_purchases(update, context))
+
+    pantry.get_items.assert_not_called()
+    reply_text.assert_awaited_once()
+    assert "entre 1 e 365" in reply_text.await_args.args[0]
+
+
+def test_plan_purchases_requires_consumption_data_before_suggesting() -> None:
+    pantry = Mock()
+    pantry.get_items.return_value = [
+        PantryItem("arroz", Decimal("0"), "kg", None)
+    ]
+    shopping = Mock()
+    context = make_plan_context(pantry, shopping, ["7"])
+    update, reply_text = make_update("/planejar 7")
+
+    asyncio.run(plan_purchases(update, context))
+
+    assert "Sem consumo cadastrado: arroz" in reply_text.await_args.args[0]
+    assert "Nenhuma reposição necessária" not in reply_text.await_args.args[0]
+    assert PENDING_PLAN_KEY not in context.user_data
+    shopping.add_quantities.assert_not_called()
+
+
+def test_plan_purchases_does_not_overlap_with_stock_analysis() -> None:
+    pantry = Mock()
+    pantry.get_items.return_value = [
+        PantryItem("arroz", Decimal("1"), "kg", Decimal("0.1"))
+    ]
+    shopping = Mock()
+    context = make_plan_context(pantry, shopping, ["7"])
+    context.user_data[PENDING_ANALYSIS_KEY] = PendingAnalysis("tomates")
+    update, reply_text = make_update("/planejar 7")
+
+    asyncio.run(plan_purchases(update, context))
+
+    assert PENDING_PLAN_KEY not in context.user_data
+    reply_text.assert_awaited_once()
+    assert "/cancelar" in reply_text.await_args.args[0]
+
+
+def test_plan_confirmation_adds_all_suggestions_with_units() -> None:
+    shopping = Mock()
+    shopping.add_quantities.return_value = [Decimal("2.5"), Decimal("3")]
+    context = make_plan_context(Mock(), shopping, [])
+    context.user_data[PENDING_PLAN_KEY] = PendingPurchasePlan(
+        days=7,
+        shortages=(
+            PlannedShortage("arroz", Decimal("0.5"), "kg"),
+            PlannedShortage("leite", Decimal("1"), "L"),
+        ),
+    )
+    update, reply_text = make_update("Sim")
+
+    asyncio.run(answer_item_check(update, context))
+
+    shopping.add_quantities.assert_called_once_with(
+        123456,
+        [("arroz", Decimal("0.5"), "kg"), ("leite", Decimal("1"), "L")],
+    )
+    assert PENDING_PLAN_KEY not in context.user_data
+    reply_text.assert_awaited_once_with(
+        "Adicionei as sugestões à lista:\n"
+        "- arroz: 2.5 kg\n"
+        "- leite: 3 L"
+    )
+
+
+def test_plan_confirmation_decline_does_not_change_list() -> None:
+    shopping = Mock()
+    context = make_plan_context(Mock(), shopping, [])
+    context.user_data[PENDING_PLAN_KEY] = PendingPurchasePlan(
+        days=7,
+        shortages=(PlannedShortage("arroz", Decimal("1"), "kg"),),
+    )
+    update, reply_text = make_update("não")
+
+    asyncio.run(answer_item_check(update, context))
+
+    shopping.add_quantities.assert_not_called()
+    assert PENDING_PLAN_KEY not in context.user_data
+    reply_text.assert_awaited_once_with(
+        "Não adicionei as sugestões do planejamento à lista."
+    )
+
+
+def test_invalid_plan_confirmation_keeps_pending_plan() -> None:
+    shopping = Mock()
+    pending_plan = PendingPurchasePlan(
+        days=7,
+        shortages=(PlannedShortage("arroz", Decimal("1"), "kg"),),
+    )
+    context = make_plan_context(Mock(), shopping, [])
+    context.user_data[PENDING_PLAN_KEY] = pending_plan
+    update, reply_text = make_update("talvez")
+
+    asyncio.run(answer_item_check(update, context))
+
+    assert context.user_data[PENDING_PLAN_KEY] is pending_plan
+    shopping.add_quantities.assert_not_called()
+    reply_text.assert_awaited_once()
+
+
+def test_plan_confirmation_rolls_back_when_list_units_conflict() -> None:
+    shopping = Mock()
+    shopping.add_quantities.side_effect = ShoppingListUnitMismatch
+    context = make_plan_context(Mock(), shopping, [])
+    context.user_data[PENDING_PLAN_KEY] = PendingPurchasePlan(
+        days=7,
+        shortages=(PlannedShortage("arroz", Decimal("1"), "kg"),),
+    )
+    update, reply_text = make_update("sim")
+
+    asyncio.run(answer_item_check(update, context))
+
+    assert PENDING_PLAN_KEY not in context.user_data
+    reply_text.assert_awaited_once()
+    assert "unidade incompatível" in reply_text.await_args.args[0]
+
+
+def test_cancel_clears_pending_purchase_plan() -> None:
+    context = make_context(Mock())
+    context.user_data[PENDING_PLAN_KEY] = PendingPurchasePlan(
+        days=7,
+        shortages=(PlannedShortage("arroz", Decimal("1"), "kg"),),
+    )
+    update, reply_text = make_update("/cancelar")
+
+    asyncio.run(cancel_item_check(update, context))
+
+    assert PENDING_PLAN_KEY not in context.user_data
+    reply_text.assert_awaited_once_with("O planejamento foi cancelado.")
+
+
+def test_purchase_history_shows_recent_records_with_default_period() -> None:
+    shopping = Mock()
+    shopping.get_history.return_value = [
+        PurchaseRecord(
+            name="arroz",
+            quantity=Decimal("1.5"),
+            unit="kg",
+            purchased_at=datetime(2026, 1, 2, 3, 4, tzinfo=timezone.utc),
+        )
+    ]
+    context = make_command_context(shopping, [])
+    update, reply_text = make_update("/historico")
+
+    asyncio.run(show_purchase_history(update, context))
+
+    shopping.get_history.assert_called_once_with(123456, 30)
+    response = reply_text.await_args.args[0]
+    assert "últimos 30 dias" in response
+    assert "arroz: 1.5 kg" in response
+    assert "2026-01-02 03:04 UTC" in response
+
+
+def test_purchase_history_accepts_custom_period() -> None:
+    shopping = Mock()
+    shopping.get_history.return_value = []
+    context = make_command_context(shopping, ["14"])
+    update, reply_text = make_update("/historico 14")
+
+    asyncio.run(show_purchase_history(update, context))
+
+    shopping.get_history.assert_called_once_with(123456, 14)
+    reply_text.assert_awaited_once_with(
+        "Nenhuma compra marcada nos últimos 14 dias."
+    )
+
+
+def test_purchase_history_rejects_invalid_period_without_store_query() -> None:
+    shopping = Mock()
+    context = make_command_context(shopping, ["0"])
+    update, reply_text = make_update("/historico 0")
+
+    asyncio.run(show_purchase_history(update, context))
+
+    shopping.get_history.assert_not_called()
+    reply_text.assert_awaited_once()
+
+
+def test_stock_plan_purchase_and_history_end_to_end(tmp_path) -> None:
+    database_path = tmp_path / "kendrick.sqlite3"
+    pantry = PantryStore(database_path)
+    shopping = ShoppingListStore(database_path)
+    pantry.set_stock(123456, "arroz", Decimal("0.5"), "kg")
+    pantry.set_daily_consumption(123456, "arroz", Decimal("0.1"), "kg")
+    planning_context = make_plan_context(pantry, shopping, ["10"])
+    planning_update, _ = make_update("/planejar 10")
+
+    asyncio.run(plan_purchases(planning_update, planning_context))
+    confirmation_update, _ = make_update("sim")
+    asyncio.run(answer_item_check(confirmation_update, planning_context))
+
+    assert shopping.get_items(123456)[0].quantity == Decimal("0.5")
+    assert shopping.get_items(123456)[0].unit == "kg"
+    shopping.mark_purchased(123456, "arroz", Decimal("0.5"))
+    assert len(shopping.get_history(123456)) == 1
 
 def test_show_pantry_displays_stock_and_consumption() -> None:
     store = Mock()

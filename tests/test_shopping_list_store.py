@@ -1,9 +1,13 @@
+import sqlite3
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 import pytest
 
 from kendrick_bot.shopping.list_store import (
     InsufficientListedQuantity,
+    PurchaseRecord,
+    ShoppingListUnitMismatch,
     ShoppingListItem,
     ShoppingListStore,
 )
@@ -81,6 +85,179 @@ def test_mark_purchased_returns_none_for_unknown_item(tmp_path) -> None:
     store = ShoppingListStore(tmp_path / "kendrick.sqlite3")
 
     assert store.mark_purchased(123, "arroz", Decimal("1")) is None
+
+
+def test_mark_purchased_records_history_atomically_and_preserves_unit(tmp_path) -> None:
+    store = ShoppingListStore(tmp_path / "kendrick.sqlite3")
+    store.add_quantity(123, "arroz", Decimal("2"), "kg")
+
+    assert store.mark_purchased(123, "arroz", Decimal("0.5")) == Decimal("1.5")
+
+    records = store.get_history(123)
+    assert len(records) == 1
+    assert records[0].name == "arroz"
+    assert records[0].quantity == Decimal("0.5")
+    assert records[0].unit == "kg"
+    assert records[0].purchased_at.tzinfo == timezone.utc
+
+
+def test_failed_purchase_does_not_create_history_record(tmp_path) -> None:
+    store = ShoppingListStore(tmp_path / "kendrick.sqlite3")
+    store.add_quantity(123, "arroz", Decimal("1"))
+
+    with pytest.raises(InsufficientListedQuantity):
+        store.mark_purchased(123, "arroz", Decimal("2"))
+
+    assert store.get_history(123) == []
+
+
+def test_purchase_history_and_list_update_rollback_together(tmp_path) -> None:
+    database_path = tmp_path / "kendrick.sqlite3"
+    store = ShoppingListStore(database_path)
+    store.add_quantity(123, "arroz", Decimal("2"))
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            """
+            CREATE TRIGGER prevent_list_update
+            BEFORE UPDATE ON shopping_list
+            BEGIN
+                SELECT RAISE(ABORT, 'simulated update failure');
+            END
+            """
+        )
+
+    with pytest.raises(sqlite3.IntegrityError):
+        store.mark_purchased(123, "arroz", Decimal("1"))
+
+    assert store.get_history(123) == []
+    assert store.get_items(123) == [
+        ShoppingListItem(name="arroz", quantity=Decimal("2"))
+    ]
+
+
+def test_purchase_history_is_isolated_per_user(tmp_path) -> None:
+    store = ShoppingListStore(tmp_path / "kendrick.sqlite3")
+    store.add_quantity(123, "arroz", Decimal("1"))
+    store.mark_purchased(123, "arroz", Decimal("1"))
+
+    assert store.get_history(456) == []
+
+
+def test_purchase_history_filters_requested_period(tmp_path) -> None:
+    database_path = tmp_path / "kendrick.sqlite3"
+    store = ShoppingListStore(database_path)
+    store.add_quantity(123, "arroz", Decimal("1"))
+    store.mark_purchased(123, "arroz", Decimal("1"))
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            "UPDATE purchase_history SET purchased_at = ?",
+            (
+                (datetime.now(timezone.utc) - timedelta(days=40)).isoformat(
+                    timespec="seconds"
+                ),
+            ),
+        )
+
+    assert store.get_history(123, days=30) == []
+    assert len(store.get_history(123, days=60)) == 1
+
+
+@pytest.mark.parametrize("days", [0, -1, 366])
+def test_purchase_history_rejects_invalid_period(tmp_path, days: int) -> None:
+    store = ShoppingListStore(tmp_path / "kendrick.sqlite3")
+
+    with pytest.raises(ValueError):
+        store.get_history(123, days)
+
+
+def test_shopping_list_schema_migration_preserves_existing_rows(tmp_path) -> None:
+    database_path = tmp_path / "legacy.sqlite3"
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            """
+            CREATE TABLE shopping_list (
+                user_id INTEGER NOT NULL,
+                item_key TEXT NOT NULL,
+                name TEXT NOT NULL,
+                quantity TEXT NOT NULL,
+                PRIMARY KEY (user_id, item_key)
+            )
+            """
+        )
+        connection.execute(
+            "INSERT INTO shopping_list VALUES (?, ?, ?, ?)",
+            (123, "arroz", "arroz", "2"),
+        )
+
+    store = ShoppingListStore(database_path)
+
+    assert store.get_items(123) == [
+        ShoppingListItem(name="arroz", quantity=Decimal("2"))
+    ]
+
+
+def test_purchase_history_schema_migration_preserves_records(tmp_path) -> None:
+    database_path = tmp_path / "legacy.sqlite3"
+    purchased_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            """
+            CREATE TABLE purchase_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                item_key TEXT NOT NULL,
+                name TEXT NOT NULL,
+                quantity TEXT NOT NULL,
+                purchased_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO purchase_history
+                (user_id, item_key, name, quantity, purchased_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (123, "arroz", "arroz", "1.5", purchased_at),
+        )
+
+    store = ShoppingListStore(database_path)
+
+    assert store.get_history(123) == [
+        PurchaseRecord(
+            name="arroz",
+            quantity=Decimal("1.5"),
+            purchased_at=datetime.fromisoformat(purchased_at),
+        )
+    ]
+
+
+def test_add_quantities_is_atomic_on_unit_mismatch(tmp_path) -> None:
+    store = ShoppingListStore(tmp_path / "kendrick.sqlite3")
+    store.add_quantity(123, "arroz", Decimal("1"), "kg")
+
+    with pytest.raises(ShoppingListUnitMismatch):
+        store.add_quantities(
+            123,
+            [
+                ("feijão", Decimal("2"), "kg"),
+                ("arroz", Decimal("1"), "unidades"),
+            ],
+        )
+
+    assert store.get_items(123) == [
+        ShoppingListItem(name="arroz", quantity=Decimal("1"), unit="kg")
+    ]
+
+
+def test_add_quantity_preserves_existing_unit_when_unspecified(tmp_path) -> None:
+    store = ShoppingListStore(tmp_path / "kendrick.sqlite3")
+    store.add_quantity(123, "arroz", Decimal("1"), "kg")
+    store.add_quantity(123, "arroz", Decimal("0.5"))
+
+    assert store.get_items(123) == [
+        ShoppingListItem(name="arroz", quantity=Decimal("1.5"), unit="kg")
+    ]
 
 
 def test_pantry_persists_stock_and_daily_consumption(tmp_path) -> None:

@@ -19,9 +19,11 @@ from kendrick_bot.telegram.handlers import (
     answer_item_check,
     cancel_item_check,
     mark_item_purchased,
+    plan_purchases,
     remove_pantry_item,
     set_pantry_consumption,
     set_pantry_stock,
+    show_purchase_history,
     show_help,
     show_list,
     show_pantry,
@@ -75,6 +77,12 @@ def build_application(settings: Settings) -> Application:
     )
     application.add_handler(
         CommandHandler("comprado", mark_item_purchased, filters=authorized_user)
+    )
+    application.add_handler(
+        CommandHandler("planejar", plan_purchases, filters=authorized_user)
+    )
+    application.add_handler(
+        CommandHandler("historico", show_purchase_history, filters=authorized_user)
     )
     application.add_handler(
         CommandHandler("cancelar", cancel_item_check, filters=authorized_user)

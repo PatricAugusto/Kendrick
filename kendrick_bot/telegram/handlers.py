@@ -1,5 +1,6 @@
 import unicodedata
 from dataclasses import dataclass
+from datetime import timezone
 from decimal import Decimal, InvalidOperation
 from typing import Literal
 
@@ -16,6 +17,7 @@ from kendrick_bot.shopping.pantry_store import (
 )
 from kendrick_bot.shopping.list_store import (
     InsufficientListedQuantity,
+    ShoppingListUnitMismatch,
     ShoppingListItem,
     ShoppingListStore,
 )
@@ -24,6 +26,7 @@ PENDING_ANALYSIS_KEY = "pending_stock_analysis"
 SHOPPING_STORE_KEY = "shopping_list_store"
 OLLAMA_CLIENT_KEY = "ollama_client"
 PANTRY_STORE_KEY = "pantry_store"
+PENDING_PLAN_KEY = "pending_purchase_plan"
 HELP_TEXT = (
     "Comandos disponíveis:\n"
     "/start — ver a saudação e esta ajuda.\n"
@@ -33,8 +36,10 @@ HELP_TEXT = (
     "/estoque <item> <quantidade> <unidade> — cadastrar ou atualizar o estoque.\n"
     "/consumo <item> <quantidade> <unidade>/dia — registrar o consumo habitual.\n"
     "/remover_despensa <item> confirmar — remover um item da despensa.\n"
+    "/planejar <dias> — prever faltas e sugerir reposição para esse período.\n"
     "/lista — consultar os itens e as quantidades para comprar.\n"
     "/comprado <item> <quantidade> — registrar o que já foi comprado.\n"
+    "/historico [dias] — consultar compras registradas (padrão: 30 dias).\n"
     "/cancelar — interromper a análise em andamento.\n\n"
     "Para analisar um item, envie o nome dele. Vou perguntar a quantidade "
     "em estoque, o consumo diário e em quantos dias será a próxima compra. "
@@ -43,7 +48,8 @@ HELP_TEXT = (
     "comprada. Quantidades decimais podem usar vírgula.\n\n"
     "Na despensa, use unidades consistentes, como `/estoque arroz 2 kg` e "
     "`/consumo arroz 0,1 kg/dia`. O consumo deve usar a mesma unidade "
-    "cadastrada no estoque."
+    "cadastrada no estoque. `/planejar` só sugere itens com consumo cadastrado "
+    "e pede confirmação antes de adicionar as faltas à lista."
 )
 
 
@@ -55,6 +61,19 @@ class PendingAnalysis:
     daily_use: Decimal | None = None
     days_until_shop: int | None = None
     shortage: Decimal | None = None
+
+
+@dataclass(frozen=True)
+class PlannedShortage:
+    name: str
+    quantity: Decimal
+    unit: str
+
+
+@dataclass(frozen=True)
+class PendingPurchasePlan:
+    days: int
+    shortages: tuple[PlannedShortage, ...]
 
 
 async def start(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
@@ -105,6 +124,146 @@ async def show_pantry(
             f"{item.unit}; consumo: {consumption}"
         )
     await update.message.reply_text("Sua despensa:\n" + "\n".join(lines))
+
+
+async def plan_purchases(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    if update.message is None:
+        return
+
+    if len(context.args) != 1:
+        await update.message.reply_text(
+            "Use /planejar <dias>. Exemplo: /planejar 7 "
+            "(período entre 1 e 365 dias)."
+        )
+        return
+    days = _parse_days(context.args[0])
+    if days is None or days > 365:
+        await update.message.reply_text(
+            "Informe um período inteiro entre 1 e 365 dias."
+        )
+        return
+
+    user = update.effective_user
+    if user is None:
+        raise RuntimeError("Não foi possível identificar o usuário da mensagem.")
+    pantry: PantryStore = context.bot_data[PANTRY_STORE_KEY]
+    pantry_items = pantry.get_items(user.id)
+    if not pantry_items:
+        await update.message.reply_text(
+            "Sua despensa está vazia. Cadastre itens com /estoque antes de planejar."
+        )
+        return
+    if isinstance(context.user_data.get(PENDING_ANALYSIS_KEY), PendingAnalysis):
+        await update.message.reply_text(
+            "Há uma análise de estoque em andamento. Use /cancelar antes de iniciar "
+            "um planejamento."
+        )
+        return
+
+    shortages: list[PlannedShortage] = []
+    sufficient_items: list[str] = []
+    items_without_consumption: list[str] = []
+    for item in pantry_items:
+        if item.daily_consumption is None:
+            items_without_consumption.append(item.name)
+            continue
+        forecast = forecast_stock(
+            stock=item.quantity,
+            daily_use=item.daily_consumption,
+            days_until_shop=days,
+        )
+        if forecast.shortage > 0:
+            shortages.append(
+                PlannedShortage(item.name, forecast.shortage, item.unit)
+            )
+        else:
+            sufficient_items.append(item.name)
+
+    lines = [f"Planejamento para os próximos {days} dias:"]
+    lines.extend(
+        f"- Repor {shortage.name}: {_format_quantity(shortage.quantity)} "
+        f"{shortage.unit}"
+        for shortage in shortages
+    )
+    lines.extend(
+        f"- Estoque suficiente: {name}"
+        for name in sufficient_items
+    )
+    if items_without_consumption:
+        lines.append(
+            "- Sem consumo cadastrado: "
+            + ", ".join(items_without_consumption)
+            + ". Use /consumo para incluir no planejamento."
+        )
+
+    if not shortages:
+        if sufficient_items:
+            lines.append("Nenhuma reposição necessária para os itens calculáveis.")
+        context.user_data.pop(PENDING_PLAN_KEY, None)
+        await update.message.reply_text("\n".join(lines))
+        return
+
+    context.user_data[PENDING_PLAN_KEY] = PendingPurchasePlan(
+        days=days,
+        shortages=tuple(shortages),
+    )
+    lines.append(
+        "Quer adicionar essas quantidades à lista de compras? "
+        "Responda Sim ou Não."
+    )
+    await update.message.reply_text("\n".join(lines))
+
+
+async def show_purchase_history(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    if update.message is None:
+        return
+
+    args = context.args
+    if len(args) > 1:
+        await update.message.reply_text(
+            "Use /historico [dias], por exemplo /historico 30."
+        )
+        return
+    days = 30 if not args else _parse_days(args[0])
+    if days is None or days > 365:
+        await update.message.reply_text(
+            "Informe um período inteiro entre 1 e 365 dias."
+        )
+        return
+
+    user = update.effective_user
+    if user is None:
+        raise RuntimeError("Não foi possível identificar o usuário da mensagem.")
+    store: ShoppingListStore = context.bot_data[SHOPPING_STORE_KEY]
+    records = store.get_history(user.id, days)
+    if not records:
+        await update.message.reply_text(
+            f"Nenhuma compra marcada nos últimos {days} dias."
+        )
+        return
+
+    lines = [
+        f"{record.purchased_at.astimezone(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')} — "
+        f"{record.name}: {_format_quantity(record.quantity)}"
+        + (f" {record.unit}" if record.unit else "")
+        for record in records
+    ]
+    suffix = (
+        "\nMostrando até as 20 compras mais recentes."
+        if len(records) == 20
+        else ""
+    )
+    await update.message.reply_text(
+        f"Compras marcadas nos últimos {days} dias:\n"
+        + "\n".join(f"- {line}" for line in lines)
+        + suffix
+    )
 
 
 async def set_pantry_stock(
@@ -300,6 +459,11 @@ async def answer_item_check(
         await update.message.reply_text("Envie o nome de um item para analisar.")
         return
 
+    pending_plan = context.user_data.get(PENDING_PLAN_KEY)
+    if isinstance(pending_plan, PendingPurchasePlan):
+        await _answer_purchase_plan(update, context, text, pending_plan)
+        return
+
     pending = context.user_data.get(PENDING_ANALYSIS_KEY)
     if not isinstance(pending, PendingAnalysis):
         context.user_data[PENDING_ANALYSIS_KEY] = PendingAnalysis(item=text)
@@ -403,6 +567,61 @@ async def answer_item_check(
     )
 
 
+async def _answer_purchase_plan(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    answer_text: str,
+    pending: PendingPurchasePlan,
+) -> None:
+    if update.message is None:
+        return
+    answer = _normalize_answer(answer_text)
+    if answer not in {"sim", "s", "não", "nao", "n"}:
+        await update.message.reply_text(
+            "Responda Sim para adicionar as sugestões à lista ou Não para manter "
+            "a lista como está."
+        )
+        return
+
+    context.user_data.pop(PENDING_PLAN_KEY, None)
+    if answer in {"não", "nao", "n"}:
+        await update.message.reply_text(
+            "Não adicionei as sugestões do planejamento à lista."
+        )
+        return
+
+    user = update.effective_user
+    if user is None:
+        raise RuntimeError("Não foi possível identificar o usuário da mensagem.")
+    store: ShoppingListStore = context.bot_data[SHOPPING_STORE_KEY]
+    additions = [
+        (item.name, item.quantity, item.unit)
+        for item in pending.shortages
+    ]
+    try:
+        totals = store.add_quantities(user.id, additions)
+    except ShoppingListUnitMismatch:
+        await update.message.reply_text(
+            "Não adicionei nenhuma sugestão: um item da lista já usa uma "
+            "unidade incompatível. Confira a lista e a despensa antes de tentar."
+        )
+        return
+    except ValueError:
+        await update.message.reply_text(
+            "Não adicionei nenhuma sugestão: uma quantidade acumulada ficou "
+            "fora dos limites aceitos. Revise os dados e tente novamente."
+        )
+        return
+
+    details = "\n".join(
+        f"- {item.name}: {_format_quantity(total)} {item.unit}"
+        for item, total in zip(pending.shortages, totals, strict=True)
+    )
+    await update.message.reply_text(
+        f"Adicionei as sugestões à lista:\n{details}"
+    )
+
+
 async def show_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.message is None:
         return
@@ -418,6 +637,7 @@ async def show_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     items = "\n".join(
         f"- {item.name}: {_format_quantity(item.quantity)}"
+        + (f" {item.unit}" if item.unit else "")
         for item in shopping_list
         if isinstance(item, ShoppingListItem)
     )
@@ -468,6 +688,11 @@ async def mark_item_purchased(
             "como comprado: a quantidade excede o que está na lista."
         )
         return
+    except ValueError:
+        await update.message.reply_text(
+            "Quantidade inválida ou fora do limite permitido."
+        )
+        return
 
     if remaining_quantity is None:
         await update.message.reply_text(
@@ -491,6 +716,10 @@ async def cancel_item_check(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         return
 
     pending = context.user_data.pop(PENDING_ANALYSIS_KEY, None)
+    pending_plan = context.user_data.pop(PENDING_PLAN_KEY, None)
+    if isinstance(pending_plan, PendingPurchasePlan):
+        await update.message.reply_text("O planejamento foi cancelado.")
+        return
     if not isinstance(pending, PendingAnalysis):
         await update.message.reply_text("Não há nenhuma análise em andamento.")
         return
