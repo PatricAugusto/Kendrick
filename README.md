@@ -7,13 +7,23 @@ kendrick_bot/
   config.py                 # lê e valida as configurações
   telegram/
     application.py          # monta a aplicação e registra comandos
-    handlers.py             # adapta mensagens do Telegram às respostas
+    handlers.py             # avalia itens e responde às mensagens
   __main__.py               # ponto de entrada do processo
 tests/                      # testes unitários, sem chamadas à API do Telegram
 ```
 
 As dependências seguem separadas por finalidade: `requirements.txt` contém o
 necessário para executar o bot; `requirements-dev.txt` adiciona o pytest.
+
+## Avaliar itens
+
+Envie o nome de um item, por exemplo `cotonete`. O bot perguntará se o estoque
+atual dura até a próxima compra. Responda `Sim` para não adicionar o item ou
+`Não` para incluí-lo. Use `/lista` para consultar os itens considerados
+necessários e `/cancelar` para interromper uma avaliação.
+
+Nesta primeira versão, a lista fica somente na memória do processo e é apagada
+quando o bot é reiniciado.
 
 ## Executar e testar
 
