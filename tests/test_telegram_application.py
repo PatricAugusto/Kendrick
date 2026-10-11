@@ -2,7 +2,7 @@ from unittest.mock import Mock, patch
 from datetime import datetime, timezone
 
 from telegram import Chat, Message, MessageEntity, Update, User
-from telegram.ext import CommandHandler, MessageHandler
+from telegram.ext import CallbackQueryHandler, CommandHandler, MessageHandler
 
 from kendrick_bot.config import Settings
 from kendrick_bot.llm.ollama import OllamaClient
@@ -13,6 +13,7 @@ from kendrick_bot.telegram.application import (
     reject_unauthorized_user,
 )
 from kendrick_bot.telegram.handlers import (
+    AUTHORIZED_USER_IDS_KEY,
     OLLAMA_CLIENT_KEY,
     PANTRY_STORE_KEY,
     SHOPPING_STORE_KEY,
@@ -29,6 +30,7 @@ from kendrick_bot.telegram.handlers import (
     show_pantry,
     show_purchase_history,
     start,
+    handle_confirmation_callback,
 )
 
 ALLOWED_USER_ID = 123456
@@ -69,8 +71,16 @@ def test_build_application_registers_start_handler() -> None:
     assert application.bot_data[SHOPPING_STORE_KEY] is shopping_store
     assert application.bot_data[PANTRY_STORE_KEY] is pantry_store
     assert application.bot_data[OLLAMA_CLIENT_KEY] is ollama_client
+    assert application.bot_data[AUTHORIZED_USER_IDS_KEY] == frozenset(
+        {ALLOWED_USER_ID}
+    )
 
     handlers = [call.args[0] for call in application.add_handler.call_args_list]
+    callback_handlers = [
+        handler for handler in handlers if isinstance(handler, CallbackQueryHandler)
+    ]
+    assert len(callback_handlers) == 1
+    assert callback_handlers[0].callback is handle_confirmation_callback
     command_handlers = {
         next(iter(handler.commands)): handler
         for handler in handlers

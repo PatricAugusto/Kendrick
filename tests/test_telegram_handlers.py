@@ -3,12 +3,15 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from unittest.mock import AsyncMock, Mock
 
+from telegram import CallbackQuery, Chat, Message, Update, User
+
 from kendrick_bot.llm.ollama import OllamaError
 from kendrick_bot.shopping.pantry_store import PantryItem
 from kendrick_bot.shopping.list_store import PurchaseRecord, ShoppingListUnitMismatch
 from kendrick_bot.shopping.pantry_store import PantryStore
 from kendrick_bot.shopping.list_store import ShoppingListStore
 from kendrick_bot.telegram.handlers import (
+    AUTHORIZED_USER_IDS_KEY,
     OLLAMA_CLIENT_KEY,
     PANTRY_STORE_KEY,
     PENDING_ANALYSIS_KEY,
@@ -18,6 +21,7 @@ from kendrick_bot.telegram.handlers import (
     PlannedShortage,
     ShoppingListItem,
     answer_item_check,
+    handle_confirmation_callback,
     ask_assistant,
     cancel_item_check,
     mark_item_purchased,
@@ -41,8 +45,10 @@ def test_start_greets_and_lists_available_commands() -> None:
 
     reply_text.assert_awaited_once()
     response = reply_text.await_args.args[0]
-    assert response.startswith("Olá!")
-    assert "Comandos disponíveis:" in response
+    assert response.startswith("Oi! Sou o Kendrick")
+    assert "Como posso ajudar?" in response
+    assert "🧺 DESPENSA" in response
+    assert "🛒 COMPRAS" in response
     assert "/start —" in response
     assert "/ajuda —" in response
     assert "/perguntar <dúvida> —" in response
@@ -65,7 +71,9 @@ def test_help_lists_commands_and_usage() -> None:
 
     reply_text.assert_awaited_once()
     response = reply_text.await_args.args[0]
-    assert "Comandos disponíveis:" in response
+    assert "Como posso ajudar?" in response
+    assert "🧺 DESPENSA" in response
+    assert "🛒 COMPRAS" in response
     assert "/ajuda —" in response
     assert "/perguntar <dúvida> —" in response
     assert "/lista —" in response
@@ -77,7 +85,7 @@ def test_help_lists_commands_and_usage() -> None:
     assert "/planejar <dias> —" in response
     assert "/historico [dias] —" in response
     assert "/cancelar —" in response
-    assert "Se houver falta" in response
+    assert "Sugestões de planejamento só entram na lista com sua confirmação." in response
 
 
 def test_help_does_not_reply_when_update_has_no_message() -> None:
@@ -139,12 +147,112 @@ def test_plan_purchases_shows_shortages_and_requires_confirmation() -> None:
     asyncio.run(plan_purchases(update, context))
 
     response = reply_text.await_args.args[0]
-    assert "Repor arroz: 0.5 kg" in response
-    assert "Estoque suficiente: leite" in response
+    assert "arroz — 0.5 kg" in response
+    assert "Estoque suficiente\n• leite" in response
     assert "Sem consumo cadastrado: sal" in response
-    assert "Responda Sim ou Não" in response
+    assert "Adicionar essas quantidades à sua lista?" in response
+    keyboard = reply_text.await_args.kwargs["reply_markup"]
+    assert keyboard.inline_keyboard[0][0].callback_data == "plan:yes"
+    assert keyboard.inline_keyboard[0][1].callback_data == "plan:no"
     assert isinstance(context.user_data[PENDING_PLAN_KEY], PendingPurchasePlan)
     shopping.add_quantities.assert_not_called()
+
+
+def test_plan_confirmation_inline_button_adds_suggestions(monkeypatch) -> None:
+    reply_text = AsyncMock()
+    answer_callback = AsyncMock()
+    monkeypatch.setattr(Message, "reply_text", reply_text)
+    monkeypatch.setattr(CallbackQuery, "answer", answer_callback)
+    user = User(id=123456, is_bot=False, first_name="Test")
+    message = Message(
+        message_id=1,
+        date=datetime.now(timezone.utc),
+        chat=Chat(id=123456, type=Chat.PRIVATE),
+        from_user=user,
+        text="Adicionar essas quantidades à sua lista?",
+    )
+    callback = CallbackQuery(
+        id="callback-1",
+        from_user=user,
+        chat_instance="chat-instance",
+        message=message,
+        data="plan:yes",
+    )
+    update = Update(update_id=1, callback_query=callback)
+    shopping = Mock()
+    shopping.add_quantities.return_value = [Decimal("1")]
+    context = Mock(
+        user_data={
+            PENDING_PLAN_KEY: PendingPurchasePlan(
+                days=7,
+                shortages=(PlannedShortage("arroz", Decimal("1"), "kg"),),
+            )
+        },
+        bot_data={
+            AUTHORIZED_USER_IDS_KEY: frozenset({123456}),
+            SHOPPING_STORE_KEY: shopping,
+        },
+    )
+
+    asyncio.run(handle_confirmation_callback(update, context))
+
+    answer_callback.assert_awaited_once_with()
+    shopping.add_quantities.assert_called_once_with(
+        123456,
+        [("arroz", Decimal("1"), "kg")],
+    )
+    assert PENDING_PLAN_KEY not in context.user_data
+    reply_text.assert_awaited_once_with(
+        "✅ Adicionado à sua lista\n\n- arroz: 1 kg"
+    )
+
+
+def test_confirmation_callback_rejects_unauthorized_user(monkeypatch) -> None:
+    reply_text = AsyncMock()
+    answer_callback = AsyncMock()
+    monkeypatch.setattr(Message, "reply_text", reply_text)
+    monkeypatch.setattr(CallbackQuery, "answer", answer_callback)
+    user = User(id=987654, is_bot=False, first_name="Unauthorized")
+    message = Message(
+        message_id=1,
+        date=datetime.now(timezone.utc),
+        chat=Chat(id=987654, type=Chat.PRIVATE),
+        from_user=user,
+        text="Adicionar essas quantidades à sua lista?",
+    )
+    update = Update(
+        update_id=2,
+        callback_query=CallbackQuery(
+            id="callback-2",
+            from_user=user,
+            chat_instance="chat-instance",
+            message=message,
+            data="plan:yes",
+        ),
+    )
+    shopping = Mock()
+    context = Mock(
+        user_data={
+            PENDING_PLAN_KEY: PendingPurchasePlan(
+                days=7,
+                shortages=(PlannedShortage("arroz", Decimal("1"), "kg"),),
+            )
+        },
+        bot_data={
+            AUTHORIZED_USER_IDS_KEY: frozenset({123456}),
+            SHOPPING_STORE_KEY: shopping,
+        },
+    )
+
+    asyncio.run(handle_confirmation_callback(update, context))
+
+    answer_callback.assert_awaited_once_with(
+        "Acesso não autorizado.",
+        show_alert=True,
+    )
+    shopping.add_quantities.assert_not_called()
+    assert PENDING_PLAN_KEY in context.user_data
+    reply_text.assert_not_awaited()
 
 
 def test_plan_purchases_reports_when_no_restock_is_needed() -> None:
@@ -159,7 +267,7 @@ def test_plan_purchases_reports_when_no_restock_is_needed() -> None:
     asyncio.run(plan_purchases(update, context))
 
     reply_text.assert_awaited_once()
-    assert "Nenhuma reposição necessária" in reply_text.await_args.args[0]
+    assert "não precisa repor nada agora" in reply_text.await_args.args[0]
     assert PENDING_PLAN_KEY not in context.user_data
 
 
@@ -188,7 +296,7 @@ def test_plan_purchases_requires_consumption_data_before_suggesting() -> None:
     asyncio.run(plan_purchases(update, context))
 
     assert "Sem consumo cadastrado: arroz" in reply_text.await_args.args[0]
-    assert "Nenhuma reposição necessária" not in reply_text.await_args.args[0]
+    assert "não precisa repor nada agora" not in reply_text.await_args.args[0]
     assert PENDING_PLAN_KEY not in context.user_data
     shopping.add_quantities.assert_not_called()
 
@@ -231,7 +339,7 @@ def test_plan_confirmation_adds_all_suggestions_with_units() -> None:
     )
     assert PENDING_PLAN_KEY not in context.user_data
     reply_text.assert_awaited_once_with(
-        "Adicionei as sugestões à lista:\n"
+        "✅ Adicionado à sua lista\n\n"
         "- arroz: 2.5 kg\n"
         "- leite: 3 L"
     )
@@ -251,7 +359,7 @@ def test_plan_confirmation_decline_does_not_change_list() -> None:
     shopping.add_quantities.assert_not_called()
     assert PENDING_PLAN_KEY not in context.user_data
     reply_text.assert_awaited_once_with(
-        "Não adicionei as sugestões do planejamento à lista."
+        "Tudo certo — mantive sua lista como estava."
     )
 
 
@@ -286,7 +394,7 @@ def test_plan_confirmation_rolls_back_when_list_units_conflict() -> None:
 
     assert PENDING_PLAN_KEY not in context.user_data
     reply_text.assert_awaited_once()
-    assert "unidade incompatível" in reply_text.await_args.args[0]
+    assert "outra unidade" in reply_text.await_args.args[0]
 
 
 def test_cancel_clears_pending_purchase_plan() -> None:
@@ -335,7 +443,7 @@ def test_purchase_history_accepts_custom_period() -> None:
 
     shopping.get_history.assert_called_once_with(123456, 14)
     reply_text.assert_awaited_once_with(
-        "Nenhuma compra marcada nos últimos 14 dias."
+        "🧾 Nenhuma compra marcada nos últimos 14 dias."
     )
 
 
@@ -391,7 +499,7 @@ def test_show_pantry_displays_stock_and_consumption() -> None:
 
     store.get_items.assert_called_once_with(123456)
     reply_text.assert_awaited_once_with(
-        "Sua despensa:\n"
+        "🧺 Sua despensa\n\n"
         "- arroz: 2.5 kg; consumo: 0.1 kg/dia\n"
         "- leite: 1 L; consumo: consumo não informado"
     )
@@ -594,7 +702,7 @@ def test_pantry_command_handlers_persist_data_end_to_end(tmp_path) -> None:
     stock_reply.assert_awaited_once()
     consumption_reply.assert_awaited_once()
     pantry_reply.assert_awaited_once_with(
-        "Sua despensa:\n- arroz: 2.5 kg; consumo: 0.1 kg/dia"
+        "🧺 Sua despensa\n\n- arroz: 2.5 kg; consumo: 0.1 kg/dia"
     )
 
 
@@ -674,7 +782,7 @@ def test_shortage_requires_confirmation_and_adds_the_missing_quantity() -> None:
     store.add_quantity.assert_called_once_with(123456, "tomates", Decimal("1"))
     assert PENDING_ANALYSIS_KEY not in context.user_data
     reply_text.assert_awaited_once_with(
-        "Adicionei tomates à lista. Quantidade acumulada: 1."
+        "✅ tomates adicionado à lista\nQuantidade acumulada: 1."
     )
 
 
@@ -696,7 +804,9 @@ def test_declining_confirmation_does_not_add_item() -> None:
 
     assert PENDING_ANALYSIS_KEY not in context.user_data
     store.add_quantity.assert_not_called()
-    reply_text.assert_awaited_once_with("Não adicionei tomates à lista.")
+    reply_text.assert_awaited_once_with(
+        "Tudo certo — não adicionei tomates à lista."
+    )
 
 
 def test_invalid_stock_keeps_analysis_on_stock_question() -> None:
@@ -767,7 +877,7 @@ def test_show_list_includes_suggested_quantities() -> None:
 
     store.get_items.assert_called_once_with(123456)
     reply_text.assert_awaited_once_with(
-        "Itens para comprar:\n- tomates: 1.5\n- arroz: 2"
+        "🛒 Sua lista de compras\n\n- tomates: 1.5\n- arroz: 2"
     )
 
 

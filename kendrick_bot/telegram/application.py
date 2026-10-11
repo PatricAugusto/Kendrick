@@ -1,6 +1,7 @@
 from telegram import Update
 from telegram.ext import (
     Application,
+    CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
     MessageHandler,
@@ -12,6 +13,7 @@ from kendrick_bot.llm.ollama import OllamaClient
 from kendrick_bot.shopping.list_store import ShoppingListStore
 from kendrick_bot.shopping.pantry_store import PantryStore
 from kendrick_bot.telegram.handlers import (
+    AUTHORIZED_USER_IDS_KEY,
     OLLAMA_CLIENT_KEY,
     PANTRY_STORE_KEY,
     SHOPPING_STORE_KEY,
@@ -27,6 +29,7 @@ from kendrick_bot.telegram.handlers import (
     show_help,
     show_list,
     show_pantry,
+    handle_confirmation_callback,
     start,
 )
 
@@ -39,6 +42,7 @@ def build_application(settings: Settings) -> Application:
         settings.ollama_base_url,
         settings.ollama_model,
     )
+    application.bot_data[AUTHORIZED_USER_IDS_KEY] = settings.allowed_user_ids
     authorized_user = filters.ChatType.PRIVATE & filters.User(
         user_id=settings.allowed_user_ids
     )
@@ -86,6 +90,12 @@ def build_application(settings: Settings) -> Application:
     )
     application.add_handler(
         CommandHandler("cancelar", cancel_item_check, filters=authorized_user)
+    )
+    application.add_handler(
+        CallbackQueryHandler(
+            handle_confirmation_callback,
+            pattern=r"^(plan|analysis):(yes|no)$",
+        )
     )
     application.add_handler(
         MessageHandler(

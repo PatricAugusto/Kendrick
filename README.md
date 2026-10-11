@@ -31,9 +31,11 @@ podem usar vírgula. O Kendrick desconta a quantidade comprada e remove o item
 quando não houver saldo restante. Não é possível registrar uma quantidade maior
 que a da lista. Use `/cancelar` para interromper uma análise.
 
-Ao executar `/start`, o Kendrick envia uma saudação com a lista de comandos
-disponíveis e uma instrução para iniciar uma análise. Use `/ajuda` para
-consultar novamente os comandos e as instruções de uso. Para dúvidas e
+Ao executar `/start`, o Kendrick envia uma saudação e os comandos organizados
+por despensa, compras e ajuda. Use `/ajuda` para consultar novamente os comandos
+e as instruções de uso. As confirmações de análise e planejamento oferecem
+botões para aprovar ou recusar; também é possível responder Sim ou Não por texto.
+Para dúvidas e
 sugestões sobre compras, use `/perguntar <dúvida>`; por exemplo,
 `/perguntar como organizar as compras da semana?`. As respostas são geradas por
 um modelo local via Ollama. O assistente não consulta nem altera sua lista ou

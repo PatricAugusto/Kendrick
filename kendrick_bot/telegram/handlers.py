@@ -4,7 +4,13 @@ from datetime import timezone
 from decimal import Decimal, InvalidOperation
 from typing import Literal
 
-from telegram import Update
+from telegram import (
+    Chat,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+    Update,
+)
 from telegram.ext import ContextTypes
 
 from kendrick_bot.llm.ollama import OllamaClient, OllamaError
@@ -27,29 +33,28 @@ SHOPPING_STORE_KEY = "shopping_list_store"
 OLLAMA_CLIENT_KEY = "ollama_client"
 PANTRY_STORE_KEY = "pantry_store"
 PENDING_PLAN_KEY = "pending_purchase_plan"
+AUTHORIZED_USER_IDS_KEY = "authorized_user_ids"
 HELP_TEXT = (
-    "Comandos disponíveis:\n"
-    "/start — ver a saudação e esta ajuda.\n"
-    "/ajuda — consultar os comandos e como usar o Kendrick.\n"
-    "/perguntar <dúvida> — pedir uma sugestão ao assistente.\n"
-    "/despensa — consultar os itens, estoques e consumos cadastrados.\n"
-    "/estoque <item> <quantidade> <unidade> — cadastrar ou atualizar o estoque.\n"
-    "/consumo <item> <quantidade> <unidade>/dia — registrar o consumo habitual.\n"
-    "/remover_despensa <item> confirmar — remover um item da despensa.\n"
-    "/planejar <dias> — prever faltas e sugerir reposição para esse período.\n"
-    "/lista — consultar os itens e as quantidades para comprar.\n"
-    "/comprado <item> <quantidade> — registrar o que já foi comprado.\n"
-    "/historico [dias] — consultar compras registradas (padrão: 30 dias).\n"
-    "/cancelar — interromper a análise em andamento.\n\n"
-    "Para analisar um item, envie o nome dele. Vou perguntar a quantidade "
-    "em estoque, o consumo diário e em quantos dias será a próxima compra. "
-    "Se houver falta, posso adicionar à lista após sua confirmação.\n\n"
-    "No /comprado, informe um item que já esteja na lista e a quantidade "
-    "comprada. Quantidades decimais podem usar vírgula.\n\n"
-    "Na despensa, use unidades consistentes, como `/estoque arroz 2 kg` e "
-    "`/consumo arroz 0,1 kg/dia`. O consumo deve usar a mesma unidade "
-    "cadastrada no estoque. `/planejar` só sugere itens com consumo cadastrado "
-    "e pede confirmação antes de adicionar as faltas à lista."
+    "Como posso ajudar?\n\n"
+    "🧺 DESPENSA\n"
+    "/despensa — ver seus itens e estoques.\n"
+    "/estoque <item> <quantidade> <unidade> — atualizar estoque.\n"
+    "/consumo <item> <quantidade> <unidade>/dia — definir consumo.\n"
+    "/remover_despensa <item> confirmar — remover um item.\n\n"
+    "🛒 COMPRAS\n"
+    "/planejar <dias> — prever o que pode faltar.\n"
+    "/lista — ver sua lista de compras.\n"
+    "/comprado <item> <quantidade> — registrar uma compra.\n"
+    "/historico [dias] — consultar compras (padrão: 30 dias).\n\n"
+    "💬 AJUDA\n"
+    "/start — abrir esta apresentação.\n"
+    "/ajuda — consultar os comandos novamente.\n"
+    "/perguntar <dúvida> — pedir uma sugestão.\n"
+    "/cancelar — interromper o fluxo atual.\n\n"
+    "Dica: envie o nome de um item para iniciar uma análise de estoque. "
+    "Use /consumo para cadastrar o consumo diário e mantenha a mesma unidade "
+    "no estoque e no consumo (por exemplo, kg). "
+    "Sugestões de planejamento só entram na lista com sua confirmação."
 )
 
 
@@ -81,7 +86,8 @@ async def start(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     await update.message.reply_text(
-        "Olá! Eu sou o Kendrick, seu assistente para organizar as compras.\n\n"
+        "Oi! Sou o Kendrick 👋\n"
+        "Vamos deixar suas compras mais simples.\n\n"
         + HELP_TEXT
     )
 
@@ -123,7 +129,9 @@ async def show_pantry(
             f"- {item.name}: {_format_quantity(item.quantity)} "
             f"{item.unit}; consumo: {consumption}"
         )
-    await update.message.reply_text("Sua despensa:\n" + "\n".join(lines))
+    await update.message.reply_text(
+        "🧺 Sua despensa\n\n" + "\n".join(lines)
+    )
 
 
 async def plan_purchases(
@@ -182,26 +190,27 @@ async def plan_purchases(
         else:
             sufficient_items.append(item.name)
 
-    lines = [f"Planejamento para os próximos {days} dias:"]
+    lines = [f"🗓 Compras para os próximos {days} dias"]
+    if shortages:
+        lines.append("\n🔸 Pode faltar")
     lines.extend(
-        f"- Repor {shortage.name}: {_format_quantity(shortage.quantity)} "
+        f"• {shortage.name} — {_format_quantity(shortage.quantity)} "
         f"{shortage.unit}"
         for shortage in shortages
     )
-    lines.extend(
-        f"- Estoque suficiente: {name}"
-        for name in sufficient_items
-    )
+    if sufficient_items:
+        lines.append("\n✅ Estoque suficiente")
+        lines.extend(f"• {name}" for name in sufficient_items)
     if items_without_consumption:
         lines.append(
-            "- Sem consumo cadastrado: "
+            "\nℹ️ Sem consumo cadastrado: "
             + ", ".join(items_without_consumption)
-            + ". Use /consumo para incluir no planejamento."
+            + ". Defina com /consumo."
         )
 
     if not shortages:
         if sufficient_items:
-            lines.append("Nenhuma reposição necessária para os itens calculáveis.")
+            lines.append("\nTudo certo — não precisa repor nada agora.")
         context.user_data.pop(PENDING_PLAN_KEY, None)
         await update.message.reply_text("\n".join(lines))
         return
@@ -210,11 +219,69 @@ async def plan_purchases(
         days=days,
         shortages=tuple(shortages),
     )
-    lines.append(
-        "Quer adicionar essas quantidades à lista de compras? "
-        "Responda Sim ou Não."
+    lines.append("\nAdicionar essas quantidades à sua lista?")
+    await update.message.reply_text(
+        "\n".join(lines),
+        reply_markup=_yes_no_keyboard("plan"),
     )
-    await update.message.reply_text("\n".join(lines))
+
+
+async def handle_confirmation_callback(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    query = update.callback_query
+    if query is None:
+        return
+
+    authorized_user_ids: frozenset[int] = context.bot_data[
+        AUTHORIZED_USER_IDS_KEY
+    ]
+    if (
+        query.from_user.id not in authorized_user_ids
+        or query.message is None
+        or query.message.chat.type != Chat.PRIVATE
+    ):
+        await query.answer("Acesso não autorizado.", show_alert=True)
+        return
+    if not isinstance(query.message, Message):
+        await query.answer("Não consegui acessar esta confirmação.", show_alert=True)
+        return
+
+    if query.data in {"plan:yes", "plan:no"}:
+        pending_plan = context.user_data.get(PENDING_PLAN_KEY)
+        if not isinstance(pending_plan, PendingPurchasePlan):
+            await query.answer("Essa confirmação não está mais ativa.", show_alert=True)
+            return
+        await query.answer()
+        await _answer_purchase_plan(
+            query.message,
+            context,
+            "sim" if query.data == "plan:yes" else "não",
+            pending_plan,
+            query.from_user.id,
+        )
+        return
+
+    if query.data in {"analysis:yes", "analysis:no"}:
+        pending_analysis = context.user_data.get(PENDING_ANALYSIS_KEY)
+        if (
+            not isinstance(pending_analysis, PendingAnalysis)
+            or pending_analysis.phase != "confirm"
+        ):
+            await query.answer("Essa confirmação não está mais ativa.", show_alert=True)
+            return
+        await query.answer()
+        await _answer_analysis_confirmation(
+            query.message,
+            context,
+            "sim" if query.data == "analysis:yes" else "não",
+            pending_analysis,
+            query.from_user.id,
+        )
+        return
+
+    await query.answer("Essa confirmação não está mais ativa.", show_alert=True)
 
 
 async def show_purchase_history(
@@ -244,7 +311,7 @@ async def show_purchase_history(
     records = store.get_history(user.id, days)
     if not records:
         await update.message.reply_text(
-            f"Nenhuma compra marcada nos últimos {days} dias."
+            f"🧾 Nenhuma compra marcada nos últimos {days} dias."
         )
         return
 
@@ -260,7 +327,7 @@ async def show_purchase_history(
         else ""
     )
     await update.message.reply_text(
-        f"Compras marcadas nos últimos {days} dias:\n"
+        f"🧾 Compras dos últimos {days} dias\n\n"
         + "\n".join(f"- {line}" for line in lines)
         + suffix
     )
@@ -461,7 +528,16 @@ async def answer_item_check(
 
     pending_plan = context.user_data.get(PENDING_PLAN_KEY)
     if isinstance(pending_plan, PendingPurchasePlan):
-        await _answer_purchase_plan(update, context, text, pending_plan)
+        user = update.effective_user
+        if user is None:
+            raise RuntimeError("Não foi possível identificar o usuário da mensagem.")
+        await _answer_purchase_plan(
+            update.message,
+            context,
+            text,
+            pending_plan,
+            user.id,
+        )
         return
 
     pending = context.user_data.get(PENDING_ANALYSIS_KEY)
@@ -532,52 +608,66 @@ async def answer_item_check(
         pending.phase = "confirm"
         await update.message.reply_text(
             _format_forecast(pending, forecast)
-            + f"\nQuer adicionar {_format_quantity(forecast.shortage)} "
-            f"à lista de compras? Responda Sim ou Não."
+            + f"\n\nAdicionar {_format_quantity(forecast.shortage)} "
+            "à sua lista?",
+            reply_markup=_yes_no_keyboard("analysis"),
         )
         return
-
-    answer = _normalize_answer(text)
-    if answer not in {"sim", "s", "não", "nao", "n"}:
-        await update.message.reply_text(
-            "Responda Sim para adicionar a quantidade faltante à lista "
-            "ou Não para não adicionar."
-        )
-        return
-
-    del context.user_data[PENDING_ANALYSIS_KEY]
-    if answer in {"não", "nao", "n"}:
-        await update.message.reply_text(
-            f"Não adicionei {pending.item} à lista."
-        )
-        return
-
-    if pending.shortage is None:
-        raise RuntimeError("Análise pendente sem quantidade faltante.")
 
     user = update.effective_user
     if user is None:
         raise RuntimeError("Não foi possível identificar o usuário da mensagem.")
-    store: ShoppingListStore = context.bot_data[SHOPPING_STORE_KEY]
-    total_quantity = store.add_quantity(user.id, pending.item, pending.shortage)
+    await _answer_analysis_confirmation(
+        update.message,
+        context,
+        text,
+        pending,
+        user.id,
+    )
 
-    await update.message.reply_text(
-        f"Adicionei {pending.item} à lista. Quantidade acumulada: "
-        f"{_format_quantity(total_quantity)}."
+
+async def _answer_analysis_confirmation(
+    message: Message,
+    context: ContextTypes.DEFAULT_TYPE,
+    answer_text: str,
+    pending: PendingAnalysis,
+    user_id: int,
+) -> None:
+    answer = _normalize_answer(answer_text)
+    if answer not in {"sim", "s", "não", "nao", "n"}:
+        await message.reply_text(
+            "Escolha Sim para adicionar o item à lista ou Não para manter "
+            "a lista como está."
+        )
+        return
+
+    context.user_data.pop(PENDING_ANALYSIS_KEY, None)
+    if answer in {"não", "nao", "n"}:
+        await message.reply_text(
+            f"Tudo certo — não adicionei {pending.item} à lista."
+        )
+        return
+    if pending.shortage is None:
+        raise RuntimeError("Análise pendente sem quantidade faltante.")
+
+    store: ShoppingListStore = context.bot_data[SHOPPING_STORE_KEY]
+    total_quantity = store.add_quantity(user_id, pending.item, pending.shortage)
+    await message.reply_text(
+        f"✅ {pending.item} adicionado à lista\n"
+        f"Quantidade acumulada: {_format_quantity(total_quantity)}."
     )
 
 
 async def _answer_purchase_plan(
-    update: Update,
+    message: Message,
     context: ContextTypes.DEFAULT_TYPE,
     answer_text: str,
     pending: PendingPurchasePlan,
+    user_id: int,
 ) -> None:
-    if update.message is None:
-        return
     answer = _normalize_answer(answer_text)
     if answer not in {"sim", "s", "não", "nao", "n"}:
-        await update.message.reply_text(
+        await message.reply_text(
             "Responda Sim para adicionar as sugestões à lista ou Não para manter "
             "a lista como está."
         )
@@ -585,31 +675,28 @@ async def _answer_purchase_plan(
 
     context.user_data.pop(PENDING_PLAN_KEY, None)
     if answer in {"não", "nao", "n"}:
-        await update.message.reply_text(
-            "Não adicionei as sugestões do planejamento à lista."
+        await message.reply_text(
+            "Tudo certo — mantive sua lista como estava."
         )
         return
 
-    user = update.effective_user
-    if user is None:
-        raise RuntimeError("Não foi possível identificar o usuário da mensagem.")
     store: ShoppingListStore = context.bot_data[SHOPPING_STORE_KEY]
     additions = [
         (item.name, item.quantity, item.unit)
         for item in pending.shortages
     ]
     try:
-        totals = store.add_quantities(user.id, additions)
+        totals = store.add_quantities(user_id, additions)
     except ShoppingListUnitMismatch:
-        await update.message.reply_text(
-            "Não adicionei nenhuma sugestão: um item da lista já usa uma "
-            "unidade incompatível. Confira a lista e a despensa antes de tentar."
+        await message.reply_text(
+            "Não alterei a lista: um item já está cadastrado com outra unidade. "
+            "Confira a lista e a despensa antes de tentar novamente."
         )
         return
     except ValueError:
-        await update.message.reply_text(
-            "Não adicionei nenhuma sugestão: uma quantidade acumulada ficou "
-            "fora dos limites aceitos. Revise os dados e tente novamente."
+        await message.reply_text(
+            "Não alterei a lista: uma quantidade acumulada excede o limite. "
+            "Revise os dados e tente novamente."
         )
         return
 
@@ -617,8 +704,25 @@ async def _answer_purchase_plan(
         f"- {item.name}: {_format_quantity(total)} {item.unit}"
         for item, total in zip(pending.shortages, totals, strict=True)
     )
-    await update.message.reply_text(
-        f"Adicionei as sugestões à lista:\n{details}"
+    await message.reply_text(
+        f"✅ Adicionado à sua lista\n\n{details}"
+    )
+
+
+def _yes_no_keyboard(action: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    "✅ Sim, adicionar",
+                    callback_data=f"{action}:yes",
+                ),
+                InlineKeyboardButton(
+                    "Não, obrigado",
+                    callback_data=f"{action}:no",
+                ),
+            ]
+        ]
     )
 
 
@@ -632,7 +736,10 @@ async def show_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     store: ShoppingListStore = context.bot_data[SHOPPING_STORE_KEY]
     shopping_list = store.get_items(user.id)
     if not shopping_list:
-        await update.message.reply_text("Sua lista de compras está vazia.")
+        await update.message.reply_text(
+            "🛒 Sua lista está vazia.\n\n"
+            "Envie o nome de um item para começar uma análise."
+        )
         return
 
     items = "\n".join(
@@ -642,10 +749,10 @@ async def show_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if isinstance(item, ShoppingListItem)
     )
     if not items:
-        await update.message.reply_text("Sua lista de compras está vazia.")
+        await update.message.reply_text("🛒 Sua lista está vazia.")
         return
 
-    await update.message.reply_text(f"Itens para comprar:\n{items}")
+    await update.message.reply_text(f"🛒 Sua lista de compras\n\n{items}")
 
 
 async def mark_item_purchased(
