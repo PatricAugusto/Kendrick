@@ -6,6 +6,7 @@ from typing import Literal
 from telegram import Update
 from telegram.ext import ContextTypes
 
+from kendrick_bot.llm.ollama import OllamaClient, OllamaError
 from kendrick_bot.shopping.forecast import StockForecast, forecast_stock
 from kendrick_bot.shopping.list_store import (
     InsufficientListedQuantity,
@@ -15,10 +16,12 @@ from kendrick_bot.shopping.list_store import (
 
 PENDING_ANALYSIS_KEY = "pending_stock_analysis"
 SHOPPING_STORE_KEY = "shopping_list_store"
+OLLAMA_CLIENT_KEY = "ollama_client"
 HELP_TEXT = (
     "Comandos disponíveis:\n"
     "/start — ver a saudação e esta ajuda.\n"
     "/ajuda — consultar os comandos e como usar o Kendrick.\n"
+    "/perguntar <dúvida> — pedir uma sugestão ao assistente.\n"
     "/lista — consultar os itens e as quantidades para comprar.\n"
     "/comprado <item> <quantidade> — registrar o que já foi comprado.\n"
     "/cancelar — interromper a análise em andamento.\n\n"
@@ -55,6 +58,34 @@ async def show_help(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     await update.message.reply_text(HELP_TEXT)
+
+
+async def ask_assistant(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    if update.message is None:
+        return
+
+    question = " ".join(context.args).strip()
+    if not question:
+        await update.message.reply_text(
+            "Escreva sua dúvida depois do comando. "
+            "Exemplo: /perguntar como organizar as compras da semana?"
+        )
+        return
+
+    client: OllamaClient = context.bot_data[OLLAMA_CLIENT_KEY]
+    try:
+        answer = await client.ask(question)
+    except OllamaError:
+        await update.message.reply_text(
+            "Não consegui obter uma resposta do modelo local. Confira se o "
+            "Ollama está aberto e se o modelo configurado está instalado."
+        )
+        return
+
+    await update.message.reply_text(answer)
 
 
 async def answer_item_check(

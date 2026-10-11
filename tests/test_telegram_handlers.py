@@ -2,12 +2,15 @@ import asyncio
 from decimal import Decimal
 from unittest.mock import AsyncMock, Mock
 
+from kendrick_bot.llm.ollama import OllamaError
 from kendrick_bot.telegram.handlers import (
+    OLLAMA_CLIENT_KEY,
     PENDING_ANALYSIS_KEY,
     SHOPPING_STORE_KEY,
     PendingAnalysis,
     ShoppingListItem,
     answer_item_check,
+    ask_assistant,
     cancel_item_check,
     mark_item_purchased,
     show_help,
@@ -27,6 +30,7 @@ def test_start_greets_and_lists_available_commands() -> None:
     assert "Comandos disponíveis:" in response
     assert "/start —" in response
     assert "/ajuda —" in response
+    assert "/perguntar <dúvida> —" in response
     assert "/lista —" in response
     assert "/comprado <item> <quantidade> —" in response
     assert "/cancelar —" in response
@@ -42,6 +46,7 @@ def test_help_lists_commands_and_usage() -> None:
     response = reply_text.await_args.args[0]
     assert "Comandos disponíveis:" in response
     assert "/ajuda —" in response
+    assert "/perguntar <dúvida> —" in response
     assert "/lista —" in response
     assert "/comprado <item> <quantidade> —" in response
     assert "/cancelar —" in response
@@ -72,6 +77,42 @@ def make_command_context(store: Mock, args: list[str]) -> Mock:
         bot_data={SHOPPING_STORE_KEY: store},
         args=args,
     )
+
+
+def test_ask_assistant_sends_question_to_local_model() -> None:
+    client = Mock()
+    client.ask = AsyncMock(return_value="Planeje o cardápio antes de comprar.")
+    context = Mock(bot_data={OLLAMA_CLIENT_KEY: client}, args=["como", "planejar?"])
+    update, reply_text = make_update("/perguntar como planejar?")
+
+    asyncio.run(ask_assistant(update, context))
+
+    client.ask.assert_awaited_once_with("como planejar?")
+    reply_text.assert_awaited_once_with("Planeje o cardápio antes de comprar.")
+
+
+def test_ask_assistant_requests_question_when_missing() -> None:
+    client = Mock()
+    context = Mock(bot_data={OLLAMA_CLIENT_KEY: client}, args=[])
+    update, reply_text = make_update("/perguntar")
+
+    asyncio.run(ask_assistant(update, context))
+
+    client.ask.assert_not_called()
+    reply_text.assert_awaited_once()
+    assert "/perguntar" in reply_text.await_args.args[0]
+
+
+def test_ask_assistant_reports_local_model_unavailable() -> None:
+    client = Mock()
+    client.ask = AsyncMock(side_effect=OllamaError("not available"))
+    context = Mock(bot_data={OLLAMA_CLIENT_KEY: client}, args=["dúvida"])
+    update, reply_text = make_update("/perguntar dúvida")
+
+    asyncio.run(ask_assistant(update, context))
+
+    reply_text.assert_awaited_once()
+    assert "Ollama" in reply_text.await_args.args[0]
 
 
 def test_enough_stock_produces_analysis_without_adding_to_list() -> None:

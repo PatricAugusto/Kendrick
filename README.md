@@ -5,6 +5,7 @@
 ```text
 kendrick_bot/
   config.py                 # lê e valida as configurações
+  llm/ollama.py             # consulta um modelo local via Ollama
   telegram/
     application.py          # monta a aplicação e registra comandos
     handlers.py             # avalia itens e responde às mensagens
@@ -31,7 +32,23 @@ que a da lista. Use `/cancelar` para interromper uma análise.
 
 Ao executar `/start`, o Kendrick envia uma saudação com a lista de comandos
 disponíveis e uma instrução para iniciar uma análise. Use `/ajuda` para
-consultar novamente os comandos e as instruções de uso.
+consultar novamente os comandos e as instruções de uso. Para dúvidas e
+sugestões sobre compras, use `/perguntar <dúvida>`; por exemplo,
+`/perguntar como organizar as compras da semana?`. As respostas são geradas por
+um modelo local via Ollama. O assistente não consulta nem altera sua lista ou
+seu estoque; análises e alterações continuam seguindo o fluxo validado do bot.
+
+Instale o Ollama na máquina que executa o bot, inicie o serviço e baixe um
+modelo, por exemplo, no PowerShell:
+
+```powershell
+ollama pull llama3.2
+```
+
+`OLLAMA_BASE_URL` e `OLLAMA_MODEL` são configurações opcionais no `.env`; por
+padrão, o Kendrick usa `http://localhost:11434` e `llama3.2`. Se o Ollama
+estiver indisponível, os outros comandos do bot continuam funcionando e
+`/perguntar` informa que não conseguiu obter resposta.
 
 A análise em andamento fica somente na memória do processo e é apagada quando o
 bot é reiniciado. A lista de compras é salva localmente no arquivo
