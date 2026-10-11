@@ -1,29 +1,26 @@
 import asyncio
+from decimal import Decimal
 from unittest.mock import AsyncMock, Mock
 
 from kendrick_bot.telegram.handlers import (
-    PENDING_ITEM_KEY,
+    PENDING_ANALYSIS_KEY,
     SHOPPING_LIST_KEY,
+    PendingAnalysis,
+    ShoppingListItem,
     answer_item_check,
     cancel_item_check,
-    check_item,
     show_list,
     start,
 )
 
 
-def test_start_replies_with_welcome_message() -> None:
-    message = Mock()
-    message.reply_text = AsyncMock()
-    update = Mock(message=message)
+def test_start_explains_stock_analysis_flow() -> None:
+    update, reply_text = make_update("/start")
 
     asyncio.run(start(update, Mock()))
 
-    message.reply_text.assert_awaited_once_with(
-        "Olá! Envie o nome de um item para avaliarmos se precisa entrar na lista. "
-        "Vou perguntar se seu estoque atual dura até a próxima compra. "
-        "Use /lista para consultar os itens ou /cancelar para interromper uma avaliação."
-    )
+    reply_text.assert_awaited_once()
+    assert "consumo diário" in reply_text.await_args.args[0]
 
 
 def test_start_does_not_reply_when_update_has_no_message() -> None:
@@ -38,84 +35,163 @@ def make_update(text: str) -> tuple[Mock, AsyncMock]:
     return Mock(message=message), reply_text
 
 
-def test_check_item_asks_if_stock_lasts_until_next_shop() -> None:
-    update, reply_text = make_update("cotonete")
+def test_enough_stock_produces_analysis_without_adding_to_list() -> None:
     context = Mock(user_data={})
+    replies = [
+        "tomates",
+        "3",
+        "1",
+        "3",
+    ]
 
-    asyncio.run(check_item(update, context))
+    for text in replies:
+        update, reply_text = make_update(text)
+        asyncio.run(answer_item_check(update, context))
 
-    assert context.user_data[PENDING_ITEM_KEY] == "cotonete"
-    reply_text.assert_awaited_once_with(
-        "Vamos avaliar cotonete: o que você tem em casa dura até a próxima compra? "
-        "Responda Sim ou Não."
-    )
-
-
-def test_answer_sim_does_not_add_item_to_shopping_list() -> None:
-    update, reply_text = make_update("Sim")
-    context = Mock(user_data={PENDING_ITEM_KEY: "cotonete"})
-
-    asyncio.run(answer_item_check(update, context))
-
-    assert PENDING_ITEM_KEY not in context.user_data
+    assert PENDING_ANALYSIS_KEY not in context.user_data
     assert SHOPPING_LIST_KEY not in context.user_data
+    assert "estoque suficiente" in reply_text.await_args.args[0]
+    assert "sobram 0" in reply_text.await_args.args[0]
+
+
+def test_shortage_requires_confirmation_and_adds_the_missing_quantity() -> None:
+    context = Mock(user_data={})
+    replies = ["tomates", "3", "1", "4"]
+    for text in replies:
+        update, _ = make_update(text)
+        asyncio.run(answer_item_check(update, context))
+
+    pending = context.user_data[PENDING_ANALYSIS_KEY]
+    assert isinstance(pending, PendingAnalysis)
+    assert pending.phase == "confirm"
+    assert pending.shortage == Decimal("1")
+
+    update, reply_text = make_update("Sim")
+    asyncio.run(answer_item_check(update, context))
+
+    item = context.user_data[SHOPPING_LIST_KEY][0]
+    assert item == ShoppingListItem(name="tomates", quantity=Decimal("1"))
+    assert PENDING_ANALYSIS_KEY not in context.user_data
     reply_text.assert_awaited_once_with(
-        "Seu estoque de cotonete dura até a próxima compra; não adicionei à lista."
+        "Adicionei tomates à lista. Quantidade acumulada: 1."
     )
 
 
-def test_answer_nao_adds_item_to_shopping_list() -> None:
+def test_declining_confirmation_does_not_add_item() -> None:
+    context = Mock(
+        user_data={
+            PENDING_ANALYSIS_KEY: PendingAnalysis(
+                item="tomates",
+                phase="confirm",
+                shortage=Decimal("2"),
+            )
+        }
+    )
     update, reply_text = make_update("Não")
-    context = Mock(user_data={PENDING_ITEM_KEY: "cotonete"})
 
     asyncio.run(answer_item_check(update, context))
 
-    assert context.user_data[SHOPPING_LIST_KEY] == ["cotonete"]
-    assert PENDING_ITEM_KEY not in context.user_data
-    reply_text.assert_awaited_once_with(
-        "Como o estoque não dura, adicionei cotonete à lista."
-    )
+    assert PENDING_ANALYSIS_KEY not in context.user_data
+    assert SHOPPING_LIST_KEY not in context.user_data
+    reply_text.assert_awaited_once_with("Não adicionei tomates à lista.")
 
 
-def test_invalid_answer_keeps_item_pending() -> None:
-    update, reply_text = make_update("talvez")
-    context = Mock(user_data={PENDING_ITEM_KEY: "cotonete"})
+def test_invalid_stock_keeps_analysis_on_stock_question() -> None:
+    context = Mock(user_data={PENDING_ANALYSIS_KEY: PendingAnalysis(item="tomates")})
+    update, reply_text = make_update("muitos")
 
     asyncio.run(answer_item_check(update, context))
 
-    assert context.user_data[PENDING_ITEM_KEY] == "cotonete"
+    pending = context.user_data[PENDING_ANALYSIS_KEY]
+    assert pending.phase == "stock"
+    assert pending.stock is None
     reply_text.assert_awaited_once()
 
 
-def test_repeated_item_is_not_added_twice() -> None:
-    update, reply_text = make_update("Não")
+def test_decimal_comma_is_accepted_for_daily_use() -> None:
     context = Mock(
         user_data={
-            PENDING_ITEM_KEY: "Cotonete",
-            SHOPPING_LIST_KEY: ["cotonete"],
+            PENDING_ANALYSIS_KEY: PendingAnalysis(
+                item="leite",
+                phase="daily_use",
+                stock=Decimal("2"),
+            )
         }
     )
+    update, _ = make_update("0,5")
 
     asyncio.run(answer_item_check(update, context))
 
-    assert context.user_data[SHOPPING_LIST_KEY] == ["cotonete"]
-    reply_text.assert_awaited_once_with("Cotonete já está na lista de compras.")
+    pending = context.user_data[PENDING_ANALYSIS_KEY]
+    assert pending.daily_use == Decimal("0.5")
+    assert pending.phase == "days_until_shop"
 
 
-def test_show_list_formats_items() -> None:
+def test_invalid_days_do_not_complete_analysis() -> None:
+    context = Mock(
+        user_data={
+            PENDING_ANALYSIS_KEY: PendingAnalysis(
+                item="tomates",
+                phase="days_until_shop",
+                stock=Decimal("3"),
+                daily_use=Decimal("1"),
+            )
+        }
+    )
+    update, reply_text = make_update("3.5")
+
+    asyncio.run(answer_item_check(update, context))
+
+    pending = context.user_data[PENDING_ANALYSIS_KEY]
+    assert pending.phase == "days_until_shop"
+    assert pending.days_until_shop is None
+    reply_text.assert_awaited_once()
+
+
+def test_show_list_includes_suggested_quantities() -> None:
+    context = Mock(
+        user_data={
+            SHOPPING_LIST_KEY: [
+                ShoppingListItem("tomates", Decimal("1.5")),
+                ShoppingListItem("arroz", Decimal("2")),
+            ]
+        }
+    )
     update, reply_text = make_update("/lista")
-    context = Mock(user_data={SHOPPING_LIST_KEY: ["cotonete", "arroz"]})
 
     asyncio.run(show_list(update, context))
 
-    reply_text.assert_awaited_once_with("Itens para comprar:\n- cotonete\n- arroz")
+    reply_text.assert_awaited_once_with(
+        "Itens para comprar:\n- tomates: 1.5\n- arroz: 2"
+    )
 
 
-def test_cancel_clears_pending_item() -> None:
+def test_repeated_shortage_accumulates_item_quantity() -> None:
+    existing_item = ShoppingListItem("tomates", Decimal("1"))
+    context = Mock(
+        user_data={
+            SHOPPING_LIST_KEY: [existing_item],
+            PENDING_ANALYSIS_KEY: PendingAnalysis(
+                item="Tomates",
+                phase="confirm",
+                shortage=Decimal("2"),
+            ),
+        }
+    )
+    update, _ = make_update("sim")
+
+    asyncio.run(answer_item_check(update, context))
+
+    assert context.user_data[SHOPPING_LIST_KEY] == [
+        ShoppingListItem("tomates", Decimal("3"))
+    ]
+
+
+def test_cancel_clears_pending_analysis() -> None:
+    context = Mock(user_data={PENDING_ANALYSIS_KEY: PendingAnalysis(item="tomates")})
     update, reply_text = make_update("/cancelar")
-    context = Mock(user_data={PENDING_ITEM_KEY: "cotonete"})
 
     asyncio.run(cancel_item_check(update, context))
 
-    assert PENDING_ITEM_KEY not in context.user_data
-    reply_text.assert_awaited_once_with("A avaliação de cotonete foi cancelada.")
+    assert PENDING_ANALYSIS_KEY not in context.user_data
+    reply_text.assert_awaited_once_with("A análise de tomates foi cancelada.")

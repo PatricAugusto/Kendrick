@@ -17,13 +17,16 @@ necessário para executar o bot; `requirements-dev.txt` adiciona o pytest.
 
 ## Avaliar itens
 
-Envie o nome de um item, por exemplo `cotonete`. O bot perguntará se o estoque
-atual dura até a próxima compra. Responda `Sim` para não adicionar o item ou
-`Não` para incluí-lo. Use `/lista` para consultar os itens considerados
-necessários e `/cancelar` para interromper uma avaliação.
+Envie o nome de um item, por exemplo `tomates`. O Kendrick perguntará, em
+sequência, o estoque atual, o consumo por dia e em quantos dias será a próxima
+compra. Use a mesma unidade nas quantidades (por exemplo, unidades ou kg).
+Com esses dados, ele estima o consumo até a compra e a quantidade que faltará.
+Se houver falta, pede confirmação antes de adicionar essa quantidade à lista.
+Use `/lista` para consultar os itens e quantidades, ou `/cancelar` para
+interromper uma análise.
 
-Nesta primeira versão, a lista fica somente na memória do processo e é apagada
-quando o bot é reiniciado.
+As análises e a lista ficam somente na memória do processo e são apagadas quando
+o bot é reiniciado.
 
 ## Executar e testar
 

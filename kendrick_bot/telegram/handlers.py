@@ -1,10 +1,31 @@
 import unicodedata
+from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
+from typing import Literal
 
 from telegram import Update
 from telegram.ext import ContextTypes
 
-PENDING_ITEM_KEY = "pending_shopping_item"
+from kendrick_bot.shopping.forecast import StockForecast, forecast_stock
+
+PENDING_ANALYSIS_KEY = "pending_stock_analysis"
 SHOPPING_LIST_KEY = "shopping_list"
+
+
+@dataclass
+class PendingAnalysis:
+    item: str
+    phase: Literal["stock", "daily_use", "days_until_shop", "confirm"] = "stock"
+    stock: Decimal | None = None
+    daily_use: Decimal | None = None
+    days_until_shop: int | None = None
+    shortage: Decimal | None = None
+
+
+@dataclass
+class ShoppingListItem:
+    name: str
+    quantity: Decimal
 
 
 async def start(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
@@ -12,25 +33,10 @@ async def start(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     await update.message.reply_text(
-        "Olá! Envie o nome de um item para avaliarmos se precisa entrar na lista. "
-        "Vou perguntar se seu estoque atual dura até a próxima compra. "
-        "Use /lista para consultar os itens ou /cancelar para interromper uma avaliação."
-    )
-
-
-async def check_item(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if update.message is None or update.message.text is None:
-        return
-
-    item = update.message.text.strip()
-    if not item:
-        await update.message.reply_text("Envie o nome de um item para avaliar.")
-        return
-
-    context.user_data[PENDING_ITEM_KEY] = item
-    await update.message.reply_text(
-        f"Vamos avaliar {item}: o que você tem em casa dura até a próxima compra? "
-        "Responda Sim ou Não."
+        "Olá! Envie o nome de um item para analisar seu estoque. "
+        "Vou perguntar a quantidade atual, o consumo diário e em quantos dias "
+        "será a próxima compra. Use /lista para consultar a lista ou /cancelar "
+        "para interromper a análise."
     )
 
 
@@ -41,34 +47,123 @@ async def answer_item_check(
     if update.message is None or update.message.text is None:
         return
 
-    item = context.user_data.get(PENDING_ITEM_KEY)
-    if item is None:
-        await check_item(update, context)
+    text = update.message.text.strip()
+    if not text:
+        await update.message.reply_text("Envie o nome de um item para analisar.")
         return
 
-    answer = _normalize_answer(update.message.text)
+    pending = context.user_data.get(PENDING_ANALYSIS_KEY)
+    if not isinstance(pending, PendingAnalysis):
+        context.user_data[PENDING_ANALYSIS_KEY] = PendingAnalysis(item=text)
+        await update.message.reply_text(
+            f"Vamos analisar {text}. Quanto você tem em estoque? "
+            "Envie apenas a quantidade (por exemplo, 3). Use a mesma unidade "
+            "para as próximas quantidades, como unidades ou kg."
+        )
+        return
+
+    if pending.phase == "stock":
+        stock = _parse_decimal(text)
+        if stock is None or stock < 0:
+            await update.message.reply_text(
+                "Quantidade inválida. Informe um número igual ou maior que zero."
+            )
+            return
+
+        pending.stock = stock
+        pending.phase = "daily_use"
+        await update.message.reply_text(
+            f"Quanto de {pending.item} você consome por dia? "
+            "Use a mesma unidade da quantidade em estoque."
+        )
+        return
+
+    if pending.phase == "daily_use":
+        daily_use = _parse_decimal(text)
+        if daily_use is None or daily_use <= 0:
+            await update.message.reply_text(
+                "Consumo inválido. Informe um número maior que zero."
+            )
+            return
+
+        pending.daily_use = daily_use
+        pending.phase = "days_until_shop"
+        await update.message.reply_text(
+            "Em quantos dias será sua próxima compra? Informe um número inteiro maior que zero."
+        )
+        return
+
+    if pending.phase == "days_until_shop":
+        days_until_shop = _parse_days(text)
+        if days_until_shop is None:
+            await update.message.reply_text(
+                "Prazo inválido. Informe em quantos dias será a próxima compra "
+                "usando um número inteiro maior que zero."
+            )
+            return
+
+        pending.days_until_shop = days_until_shop
+        forecast = forecast_stock(
+            stock=pending.stock,
+            daily_use=pending.daily_use,
+            days_until_shop=days_until_shop,
+        )
+        if forecast.shortage == 0:
+            del context.user_data[PENDING_ANALYSIS_KEY]
+            await update.message.reply_text(
+                _format_forecast(pending, forecast)
+                + "\nSeu estoque deve durar até a próxima compra; não precisa adicionar."
+            )
+            return
+
+        pending.shortage = forecast.shortage
+        pending.phase = "confirm"
+        await update.message.reply_text(
+            _format_forecast(pending, forecast)
+            + f"\nQuer adicionar {_format_quantity(forecast.shortage)} "
+            f"à lista de compras? Responda Sim ou Não."
+        )
+        return
+
+    answer = _normalize_answer(text)
     if answer not in {"sim", "s", "não", "nao", "n"}:
         await update.message.reply_text(
-            "Não entendi. Responda Sim se o estoque dura até a próxima compra "
-            "ou Não se não dura."
+            "Responda Sim para adicionar a quantidade faltante à lista "
+            "ou Não para não adicionar."
         )
         return
 
-    del context.user_data[PENDING_ITEM_KEY]
-
-    if answer in {"sim", "s"}:
+    del context.user_data[PENDING_ANALYSIS_KEY]
+    if answer in {"não", "nao", "n"}:
         await update.message.reply_text(
-            f"Seu estoque de {item} dura até a próxima compra; não adicionei à lista."
+            f"Não adicionei {pending.item} à lista."
         )
         return
+
+    if pending.shortage is None:
+        raise RuntimeError("Análise pendente sem quantidade faltante.")
 
     shopping_list = context.user_data.setdefault(SHOPPING_LIST_KEY, [])
-    if any(existing.casefold() == item.casefold() for existing in shopping_list):
-        await update.message.reply_text(f"{item} já está na lista de compras.")
-        return
+    existing_item = next(
+        (
+            item
+            for item in shopping_list
+            if isinstance(item, ShoppingListItem)
+            and item.name.casefold() == pending.item.casefold()
+        ),
+        None,
+    )
+    if existing_item is None:
+        shopping_list.append(ShoppingListItem(pending.item, pending.shortage))
+        total_quantity = pending.shortage
+    else:
+        existing_item.quantity += pending.shortage
+        total_quantity = existing_item.quantity
 
-    shopping_list.append(item)
-    await update.message.reply_text(f"Como o estoque não dura, adicionei {item} à lista.")
+    await update.message.reply_text(
+        f"Adicionei {pending.item} à lista. Quantidade acumulada: "
+        f"{_format_quantity(total_quantity)}."
+    )
 
 
 async def show_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -80,7 +175,15 @@ async def show_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text("Sua lista de compras está vazia.")
         return
 
-    items = "\n".join(f"- {item}" for item in shopping_list)
+    items = "\n".join(
+        f"- {item.name}: {_format_quantity(item.quantity)}"
+        for item in shopping_list
+        if isinstance(item, ShoppingListItem)
+    )
+    if not items:
+        await update.message.reply_text("Sua lista de compras está vazia.")
+        return
+
     await update.message.reply_text(f"Itens para comprar:\n{items}")
 
 
@@ -88,14 +191,75 @@ async def cancel_item_check(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     if update.message is None:
         return
 
-    item = context.user_data.pop(PENDING_ITEM_KEY, None)
-    if item is None:
-        await update.message.reply_text("Não há nenhuma avaliação em andamento.")
+    pending = context.user_data.pop(PENDING_ANALYSIS_KEY, None)
+    if not isinstance(pending, PendingAnalysis):
+        await update.message.reply_text("Não há nenhuma análise em andamento.")
         return
 
-    await update.message.reply_text(f"A avaliação de {item} foi cancelada.")
+    await update.message.reply_text(f"A análise de {pending.item} foi cancelada.")
+
+
+def _parse_decimal(value: str) -> Decimal | None:
+    try:
+        number = Decimal(value.replace(",", "."))
+    except InvalidOperation:
+        return None
+    return number if number.is_finite() else None
+
+
+def _parse_days(value: str) -> int | None:
+    try:
+        days = int(value)
+    except ValueError:
+        return None
+    return days if days > 0 else None
+
+
+def _format_forecast(
+    pending: PendingAnalysis,
+    forecast: StockForecast,
+) -> str:
+    if (
+        pending.stock is None
+        or pending.daily_use is None
+        or pending.days_until_shop is None
+    ):
+        raise RuntimeError("Análise incompleta ao montar a previsão.")
+
+    details = (
+        f"Análise de {pending.item}:\n"
+        f"- Estoque atual: {_format_quantity(pending.stock)}\n"
+        f"- Consumo: {_format_quantity(pending.daily_use)} por dia\n"
+        f"- Próxima compra: em {pending.days_until_shop} dias"
+    )
+    if forecast.shortage == 0:
+        return (
+            f"{details}\n- Previsão: estoque suficiente; "
+            f"sobram {_format_quantity(forecast.remaining)}."
+        )
+
+    if forecast.days_of_stock == 0:
+        depletion = "Você já está sem estoque."
+    else:
+        depletion = (
+            "O estoque acaba em aproximadamente "
+            f"{_format_quantity(forecast.days_of_stock)} dias."
+        )
+
+    return (
+        f"{details}\n- Previsão: {depletion} "
+        f"Faltam {_format_quantity(forecast.shortage)} para cobrir o período."
+    )
+
+
+def _format_quantity(quantity: Decimal) -> str:
+    return format(quantity.normalize(), "f")
 
 
 def _normalize_answer(answer: str) -> str:
     normalized = unicodedata.normalize("NFD", answer.strip().casefold())
-    return "".join(character for character in normalized if unicodedata.category(character) != "Mn")
+    return "".join(
+        character
+        for character in normalized
+        if unicodedata.category(character) != "Mn"
+    )
