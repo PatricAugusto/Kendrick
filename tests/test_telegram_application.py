@@ -5,11 +5,13 @@ from telegram import Chat, Message, MessageEntity, Update, User
 from telegram.ext import CommandHandler, MessageHandler
 
 from kendrick_bot.config import Settings
+from kendrick_bot.shopping.list_store import ShoppingListStore
 from kendrick_bot.telegram.application import (
     build_application,
     reject_unauthorized_user,
 )
 from kendrick_bot.telegram.handlers import (
+    SHOPPING_STORE_KEY,
     answer_item_check,
     cancel_item_check,
     show_list,
@@ -21,6 +23,8 @@ ALLOWED_USER_ID = 123456
 
 def test_build_application_registers_start_handler() -> None:
     application = Mock()
+    application.bot_data = {}
+    shopping_store = Mock(spec=ShoppingListStore)
     builder = Mock()
     builder.token.return_value = builder
     builder.build.return_value = application
@@ -32,12 +36,16 @@ def test_build_application_registers_start_handler() -> None:
     with patch(
         "kendrick_bot.telegram.application.Application.builder",
         return_value=builder,
-    ) as application_builder:
+    ) as application_builder, patch(
+        "kendrick_bot.telegram.application.ShoppingListStore",
+        return_value=shopping_store,
+    ):
         result = build_application(settings)
 
     application_builder.assert_called_once_with()
     builder.token.assert_called_once_with("test-token")
     assert result is application
+    assert application.bot_data[SHOPPING_STORE_KEY] is shopping_store
 
     handlers = [call.args[0] for call in application.add_handler.call_args_list]
     command_handlers = {

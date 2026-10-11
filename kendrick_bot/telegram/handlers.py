@@ -7,9 +7,10 @@ from telegram import Update
 from telegram.ext import ContextTypes
 
 from kendrick_bot.shopping.forecast import StockForecast, forecast_stock
+from kendrick_bot.shopping.list_store import ShoppingListItem, ShoppingListStore
 
 PENDING_ANALYSIS_KEY = "pending_stock_analysis"
-SHOPPING_LIST_KEY = "shopping_list"
+SHOPPING_STORE_KEY = "shopping_list_store"
 
 
 @dataclass
@@ -20,12 +21,6 @@ class PendingAnalysis:
     daily_use: Decimal | None = None
     days_until_shop: int | None = None
     shortage: Decimal | None = None
-
-
-@dataclass
-class ShoppingListItem:
-    name: str
-    quantity: Decimal
 
 
 async def start(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
@@ -146,22 +141,11 @@ async def answer_item_check(
     if pending.shortage is None:
         raise RuntimeError("Análise pendente sem quantidade faltante.")
 
-    shopping_list = context.user_data.setdefault(SHOPPING_LIST_KEY, [])
-    existing_item = next(
-        (
-            item
-            for item in shopping_list
-            if isinstance(item, ShoppingListItem)
-            and item.name.casefold() == pending.item.casefold()
-        ),
-        None,
-    )
-    if existing_item is None:
-        shopping_list.append(ShoppingListItem(pending.item, pending.shortage))
-        total_quantity = pending.shortage
-    else:
-        existing_item.quantity += pending.shortage
-        total_quantity = existing_item.quantity
+    user = update.effective_user
+    if user is None:
+        raise RuntimeError("Não foi possível identificar o usuário da mensagem.")
+    store: ShoppingListStore = context.bot_data[SHOPPING_STORE_KEY]
+    total_quantity = store.add_quantity(user.id, pending.item, pending.shortage)
 
     await update.message.reply_text(
         f"Adicionei {pending.item} à lista. Quantidade acumulada: "
@@ -173,7 +157,11 @@ async def show_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.message is None:
         return
 
-    shopping_list = context.user_data.get(SHOPPING_LIST_KEY, [])
+    user = update.effective_user
+    if user is None:
+        raise RuntimeError("Não foi possível identificar o usuário da mensagem.")
+    store: ShoppingListStore = context.bot_data[SHOPPING_STORE_KEY]
+    shopping_list = store.get_items(user.id)
     if not shopping_list:
         await update.message.reply_text("Sua lista de compras está vazia.")
         return

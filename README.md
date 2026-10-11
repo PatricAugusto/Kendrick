@@ -28,8 +28,11 @@ interromper uma análise.
 Ao executar `/start`, o Kendrick envia uma saudação com a lista de comandos
 disponíveis e uma instrução para iniciar uma análise.
 
-As análises e a lista ficam somente na memória do processo e são apagadas quando
-o bot é reiniciado.
+A análise em andamento fica somente na memória do processo e é apagada quando o
+bot é reiniciado. A lista de compras é salva localmente no arquivo
+`kendrick.sqlite3`, na pasta do projeto, e continua disponível após reiniciar o
+bot. Cada usuário autorizado tem sua própria lista; para removê-la, apague o
+arquivo com o bot parado.
 
 ## Executar e testar
 

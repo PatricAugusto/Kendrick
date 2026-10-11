@@ -8,7 +8,9 @@ from telegram.ext import (
 )
 
 from kendrick_bot.config import Settings
+from kendrick_bot.shopping.list_store import ShoppingListStore
 from kendrick_bot.telegram.handlers import (
+    SHOPPING_STORE_KEY,
     answer_item_check,
     cancel_item_check,
     show_list,
@@ -18,6 +20,7 @@ from kendrick_bot.telegram.handlers import (
 
 def build_application(settings: Settings) -> Application:
     application = Application.builder().token(settings.telegram_bot_token).build()
+    application.bot_data[SHOPPING_STORE_KEY] = ShoppingListStore()
     authorized_user = filters.ChatType.PRIVATE & filters.User(
         user_id=settings.allowed_user_ids
     )

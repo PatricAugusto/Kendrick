@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, Mock
 
 from kendrick_bot.telegram.handlers import (
     PENDING_ANALYSIS_KEY,
-    SHOPPING_LIST_KEY,
+    SHOPPING_STORE_KEY,
     PendingAnalysis,
     ShoppingListItem,
     answer_item_check,
@@ -38,11 +38,12 @@ def test_start_does_not_reply_when_update_has_no_message() -> None:
 def make_update(text: str) -> tuple[Mock, AsyncMock]:
     reply_text = AsyncMock()
     message = Mock(text=text, reply_text=reply_text)
-    return Mock(message=message), reply_text
+    return Mock(message=message, effective_user=Mock(id=123456)), reply_text
 
 
 def test_enough_stock_produces_analysis_without_adding_to_list() -> None:
-    context = Mock(user_data={})
+    store = Mock()
+    context = make_context(store)
     replies = [
         "tomates",
         "3",
@@ -55,13 +56,15 @@ def test_enough_stock_produces_analysis_without_adding_to_list() -> None:
         asyncio.run(answer_item_check(update, context))
 
     assert PENDING_ANALYSIS_KEY not in context.user_data
-    assert SHOPPING_LIST_KEY not in context.user_data
+    store.add_quantity.assert_not_called()
     assert "estoque suficiente" in reply_text.await_args.args[0]
     assert "sobram 0" in reply_text.await_args.args[0]
 
 
 def test_shortage_requires_confirmation_and_adds_the_missing_quantity() -> None:
-    context = Mock(user_data={})
+    store = Mock()
+    store.add_quantity.return_value = Decimal("1")
+    context = make_context(store)
     replies = ["tomates", "3", "1", "4"]
     for text in replies:
         update, _ = make_update(text)
@@ -75,8 +78,7 @@ def test_shortage_requires_confirmation_and_adds_the_missing_quantity() -> None:
     update, reply_text = make_update("Sim")
     asyncio.run(answer_item_check(update, context))
 
-    item = context.user_data[SHOPPING_LIST_KEY][0]
-    assert item == ShoppingListItem(name="tomates", quantity=Decimal("1"))
+    store.add_quantity.assert_called_once_with(123456, "tomates", Decimal("1"))
     assert PENDING_ANALYSIS_KEY not in context.user_data
     reply_text.assert_awaited_once_with(
         "Adicionei tomates à lista. Quantidade acumulada: 1."
@@ -84,6 +86,7 @@ def test_shortage_requires_confirmation_and_adds_the_missing_quantity() -> None:
 
 
 def test_declining_confirmation_does_not_add_item() -> None:
+    store = Mock()
     context = Mock(
         user_data={
             PENDING_ANALYSIS_KEY: PendingAnalysis(
@@ -91,14 +94,15 @@ def test_declining_confirmation_does_not_add_item() -> None:
                 phase="confirm",
                 shortage=Decimal("2"),
             )
-        }
+        },
+        bot_data={SHOPPING_STORE_KEY: store},
     )
     update, reply_text = make_update("Não")
 
     asyncio.run(answer_item_check(update, context))
 
     assert PENDING_ANALYSIS_KEY not in context.user_data
-    assert SHOPPING_LIST_KEY not in context.user_data
+    store.add_quantity.assert_not_called()
     reply_text.assert_awaited_once_with("Não adicionei tomates à lista.")
 
 
@@ -155,42 +159,43 @@ def test_invalid_days_do_not_complete_analysis() -> None:
 
 
 def test_show_list_includes_suggested_quantities() -> None:
-    context = Mock(
-        user_data={
-            SHOPPING_LIST_KEY: [
+    store = Mock(
+        get_items=Mock(
+            return_value=[
                 ShoppingListItem("tomates", Decimal("1.5")),
                 ShoppingListItem("arroz", Decimal("2")),
             ]
-        }
+        )
     )
+    context = make_context(store)
     update, reply_text = make_update("/lista")
 
     asyncio.run(show_list(update, context))
 
+    store.get_items.assert_called_once_with(123456)
     reply_text.assert_awaited_once_with(
         "Itens para comprar:\n- tomates: 1.5\n- arroz: 2"
     )
 
 
 def test_repeated_shortage_accumulates_item_quantity() -> None:
-    existing_item = ShoppingListItem("tomates", Decimal("1"))
+    store = Mock()
+    store.add_quantity.return_value = Decimal("3")
     context = Mock(
         user_data={
-            SHOPPING_LIST_KEY: [existing_item],
             PENDING_ANALYSIS_KEY: PendingAnalysis(
                 item="Tomates",
                 phase="confirm",
                 shortage=Decimal("2"),
             ),
-        }
+        },
+        bot_data={SHOPPING_STORE_KEY: store},
     )
     update, _ = make_update("sim")
 
     asyncio.run(answer_item_check(update, context))
 
-    assert context.user_data[SHOPPING_LIST_KEY] == [
-        ShoppingListItem("tomates", Decimal("3"))
-    ]
+    store.add_quantity.assert_called_once_with(123456, "Tomates", Decimal("2"))
 
 
 def test_cancel_clears_pending_analysis() -> None:
@@ -201,3 +206,7 @@ def test_cancel_clears_pending_analysis() -> None:
 
     assert PENDING_ANALYSIS_KEY not in context.user_data
     reply_text.assert_awaited_once_with("A análise de tomates foi cancelada.")
+
+
+def make_context(store: Mock) -> Mock:
+    return Mock(user_data={}, bot_data={SHOPPING_STORE_KEY: store})
