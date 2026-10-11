@@ -8,11 +8,14 @@ from kendrick_bot.config import Settings
 
 
 def test_main_builds_and_runs_the_telegram_application() -> None:
-    settings = Settings(telegram_bot_token="test-token")
+    settings = Settings(
+        telegram_bot_token="test-token",
+        allowed_user_ids=frozenset({123}),
+    )
     application = Mock()
 
     with (
-        patch.object(entrypoint.logging, "basicConfig") as configure_logging,
+        patch.object(entrypoint, "configure_logging") as configure_logging,
         patch.object(entrypoint, "get_settings", return_value=settings) as get_settings,
         patch.object(
             entrypoint,
@@ -24,6 +27,7 @@ def test_main_builds_and_runs_the_telegram_application() -> None:
 
     configure_logging.assert_called_once()
     get_settings.assert_called_once_with()
+    configure_logging.assert_called_once_with("test-token")
     build_application.assert_called_once_with(settings)
     application.run_polling.assert_called_once_with()
 
@@ -35,11 +39,14 @@ def test_main_shows_sanitized_error_when_telegram_rejects_token() -> None:
     )
 
     with (
-        patch.object(entrypoint.logging, "basicConfig"),
+        patch.object(entrypoint, "configure_logging"),
         patch.object(
             entrypoint,
             "get_settings",
-            return_value=Settings(telegram_bot_token="secret-token"),
+            return_value=Settings(
+                telegram_bot_token="secret-token",
+                allowed_user_ids=frozenset({123}),
+            ),
         ),
         patch.object(entrypoint, "build_application", return_value=application),
         pytest.raises(SystemExit) as error,

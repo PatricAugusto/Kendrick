@@ -31,13 +31,20 @@ o bot é reiniciado.
 ## Executar e testar
 
 1. Crie um bot no Telegram conversando com o `@BotFather` e copie o token.
-2. Na pasta do projeto, copie `.env.example` para `.env` e coloque o token em
-   `TELEGRAM_BOT_TOKEN`.
-3. Instale as dependências de desenvolvimento, incluindo as do bot e o pytest:
+2. Descubra seu ID numérico do Telegram (por exemplo, consultando um bot de
+   informações de perfil) e use somente IDs das pessoas que terão acesso.
+3. Na pasta do projeto, copie `.env.example` para `.env`, coloque o token em
+   `TELEGRAM_BOT_TOKEN` e seu ID em `TELEGRAM_ALLOWED_USER_IDS`. Para mais de
+   uma pessoa autorizada, separe os IDs por vírgula.
+4. Instale as dependências de desenvolvimento, incluindo as do bot e o pytest:
    `python -m pip install -r requirements-dev.txt`.
-4. Rode os testes unitários: `python -m pytest -q`.
-5. Inicie o bot: `python -m kendrick_bot`.
-6. Abra a conversa com seu bot no Telegram e envie `/start`.
+5. Rode os testes unitários: `python -m pytest -q`.
+6. Inicie o bot: `python -m kendrick_bot`.
+7. Abra a conversa com seu bot no Telegram e envie `/start`.
 
 O arquivo `.env` contém um segredo e é ignorado pelo Git. Não compartilhe nem
-publique seu token.
+publique seu token. O bot só aceita mensagens privadas dos IDs autorizados; os
+demais usuários não podem acessar comandos, análises ou lista de compras. Sem
+uma lista válida em `TELEGRAM_ALLOWED_USER_IDS`, o bot não inicia. O token é
+redigido dos logs, e os logs informativos do `httpx` (que incluem a URL da API)
+são suprimidos.
