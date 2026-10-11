@@ -7,7 +7,11 @@ from telegram import Update
 from telegram.ext import ContextTypes
 
 from kendrick_bot.shopping.forecast import StockForecast, forecast_stock
-from kendrick_bot.shopping.list_store import ShoppingListItem, ShoppingListStore
+from kendrick_bot.shopping.list_store import (
+    InsufficientListedQuantity,
+    ShoppingListItem,
+    ShoppingListStore,
+)
 
 PENDING_ANALYSIS_KEY = "pending_stock_analysis"
 SHOPPING_STORE_KEY = "shopping_list_store"
@@ -32,6 +36,7 @@ async def start(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
         "Comandos disponíveis:\n"
         "/start — ver esta mensagem de ajuda.\n"
         "/lista — consultar os itens e as quantidades para comprar.\n"
+        "/comprado <item> <quantidade> — registrar o que já foi comprado.\n"
         "/cancelar — interromper a análise em andamento.\n\n"
         "Para começar, envie o nome de um item. Vou perguntar a quantidade "
         "em estoque, o consumo diário e em quantos dias será a próxima compra."
@@ -176,6 +181,64 @@ async def show_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     await update.message.reply_text(f"Itens para comprar:\n{items}")
+
+
+async def mark_item_purchased(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    if update.message is None:
+        return
+
+    args = context.args
+    if len(args) < 2:
+        await update.message.reply_text(
+            "Use /comprado <item> <quantidade>. "
+            "Exemplo: /comprado tomates 2"
+        )
+        return
+
+    item_name = " ".join(args[:-1]).strip()
+    quantity = _parse_decimal(args[-1])
+    if quantity is None or quantity <= 0:
+        await update.message.reply_text(
+            "Quantidade inválida. Informe um número maior que zero "
+            "(por exemplo, 2 ou 0,5)."
+        )
+        return
+
+    user = update.effective_user
+    if user is None:
+        raise RuntimeError("Não foi possível identificar o usuário da mensagem.")
+    store: ShoppingListStore = context.bot_data[SHOPPING_STORE_KEY]
+    try:
+        remaining_quantity = store.mark_purchased(
+            user.id,
+            item_name,
+            quantity,
+        )
+    except InsufficientListedQuantity:
+        await update.message.reply_text(
+            f"Não é possível marcar {_format_quantity(quantity)} de {item_name} "
+            "como comprado: a quantidade excede o que está na lista."
+        )
+        return
+
+    if remaining_quantity is None:
+        await update.message.reply_text(
+            f"{item_name} não está na sua lista de compras."
+        )
+        return
+    if remaining_quantity == 0:
+        await update.message.reply_text(
+            f"Marquei {item_name} como comprado e removi da lista."
+        )
+        return
+
+    await update.message.reply_text(
+        f"Marquei {_format_quantity(quantity)} de {item_name} como comprado. "
+        f"Restam {_format_quantity(remaining_quantity)} na lista."
+    )
 
 
 async def cancel_item_check(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

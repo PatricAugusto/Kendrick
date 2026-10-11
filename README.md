@@ -22,8 +22,12 @@ sequência, o estoque atual, o consumo por dia e em quantos dias será a próxim
 compra. Use a mesma unidade nas quantidades (por exemplo, unidades ou kg).
 Com esses dados, ele estima o consumo até a compra e a quantidade que faltará.
 Se houver falta, pede confirmação antes de adicionar essa quantidade à lista.
-Use `/lista` para consultar os itens e quantidades, ou `/cancelar` para
-interromper uma análise.
+Use `/lista` para consultar os itens e quantidades. Quando comprar parte ou
+toda a quantidade de um item, use `/comprado <item> <quantidade>` (por exemplo,
+`/comprado tomates 2`); nomes com espaços são aceitos, e quantidades decimais
+podem usar vírgula. O Kendrick desconta a quantidade comprada e remove o item
+quando não houver saldo restante. Não é possível registrar uma quantidade maior
+que a da lista. Use `/cancelar` para interromper uma análise.
 
 Ao executar `/start`, o Kendrick envia uma saudação com a lista de comandos
 disponíveis e uma instrução para iniciar uma análise.

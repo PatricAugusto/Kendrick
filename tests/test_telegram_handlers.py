@@ -9,6 +9,7 @@ from kendrick_bot.telegram.handlers import (
     ShoppingListItem,
     answer_item_check,
     cancel_item_check,
+    mark_item_purchased,
     show_list,
     start,
 )
@@ -25,6 +26,7 @@ def test_start_greets_and_lists_available_commands() -> None:
     assert "Comandos disponíveis:" in response
     assert "/start —" in response
     assert "/lista —" in response
+    assert "/comprado <item> <quantidade> —" in response
     assert "/cancelar —" in response
     assert "consumo diário" in response
 
@@ -39,6 +41,14 @@ def make_update(text: str) -> tuple[Mock, AsyncMock]:
     reply_text = AsyncMock()
     message = Mock(text=text, reply_text=reply_text)
     return Mock(message=message, effective_user=Mock(id=123456)), reply_text
+
+
+def make_command_context(store: Mock, args: list[str]) -> Mock:
+    return Mock(
+        user_data={},
+        bot_data={SHOPPING_STORE_KEY: store},
+        args=args,
+    )
 
 
 def test_enough_stock_produces_analysis_without_adding_to_list() -> None:
@@ -175,6 +185,97 @@ def test_show_list_includes_suggested_quantities() -> None:
     store.get_items.assert_called_once_with(123456)
     reply_text.assert_awaited_once_with(
         "Itens para comprar:\n- tomates: 1.5\n- arroz: 2"
+    )
+
+
+def test_mark_item_purchased_subtracts_quantity() -> None:
+    store = Mock()
+    store.mark_purchased.return_value = Decimal("1.5")
+    context = make_command_context(store, ["tomates", "0,5"])
+    update, reply_text = make_update("/comprado tomates 0,5")
+
+    asyncio.run(mark_item_purchased(update, context))
+
+    store.mark_purchased.assert_called_once_with(
+        123456,
+        "tomates",
+        Decimal("0.5"),
+    )
+    reply_text.assert_awaited_once_with(
+        "Marquei 0.5 de tomates como comprado. Restam 1.5 na lista."
+    )
+
+
+def test_mark_item_purchased_supports_item_names_with_spaces() -> None:
+    store = Mock()
+    store.mark_purchased.return_value = Decimal("0")
+    context = make_command_context(store, ["leite", "integral", "2"])
+    update, reply_text = make_update("/comprado leite integral 2")
+
+    asyncio.run(mark_item_purchased(update, context))
+
+    store.mark_purchased.assert_called_once_with(
+        123456,
+        "leite integral",
+        Decimal("2"),
+    )
+    reply_text.assert_awaited_once_with(
+        "Marquei leite integral como comprado e removi da lista."
+    )
+
+
+def test_mark_item_purchased_requires_item_and_quantity() -> None:
+    store = Mock()
+    context = make_command_context(store, ["tomates"])
+    update, reply_text = make_update("/comprado tomates")
+
+    asyncio.run(mark_item_purchased(update, context))
+
+    store.mark_purchased.assert_not_called()
+    reply_text.assert_awaited_once_with(
+        "Use /comprado <item> <quantidade>. "
+        "Exemplo: /comprado tomates 2"
+    )
+
+
+def test_mark_item_purchased_rejects_invalid_quantity() -> None:
+    store = Mock()
+    context = make_command_context(store, ["tomates", "0"])
+    update, reply_text = make_update("/comprado tomates 0")
+
+    asyncio.run(mark_item_purchased(update, context))
+
+    store.mark_purchased.assert_not_called()
+    reply_text.assert_awaited_once()
+    assert "Quantidade inválida" in reply_text.await_args.args[0]
+
+
+def test_mark_item_purchased_reports_item_not_on_list() -> None:
+    store = Mock()
+    store.mark_purchased.return_value = None
+    context = make_command_context(store, ["tomates", "1"])
+    update, reply_text = make_update("/comprado tomates 1")
+
+    asyncio.run(mark_item_purchased(update, context))
+
+    reply_text.assert_awaited_once_with(
+        "tomates não está na sua lista de compras."
+    )
+
+
+def test_mark_item_purchased_reports_when_quantity_exceeds_listed() -> None:
+    from kendrick_bot.shopping.list_store import InsufficientListedQuantity
+
+    store = Mock()
+    store.mark_purchased.side_effect = InsufficientListedQuantity
+    context = make_command_context(store, ["tomates", "3"])
+    update, reply_text = make_update("/comprado tomates 3")
+
+    asyncio.run(mark_item_purchased(update, context))
+
+    reply_text.assert_awaited_once_with(
+        "Não é possível marcar 3 de tomates como comprado: "
+        "a quantidade excede o que está na lista."
     )
 
 

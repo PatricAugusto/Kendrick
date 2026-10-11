@@ -11,6 +11,10 @@ class ShoppingListItem:
     quantity: Decimal
 
 
+class InsufficientListedQuantity(ValueError):
+    pass
+
+
 class ShoppingListStore:
     def __init__(self, database_path: str | Path | None = None) -> None:
         self.database_path = (
@@ -94,6 +98,57 @@ class ShoppingListStore:
                         (str(total_quantity), user_id, item_key),
                     )
         return total_quantity
+
+    def mark_purchased(
+        self,
+        user_id: int,
+        name: str,
+        quantity: Decimal,
+    ) -> Decimal | None:
+        self._validate_user_id(user_id)
+        if not name.strip():
+            raise ValueError("O nome do item não pode ficar vazio.")
+        if not quantity.is_finite() or quantity <= 0:
+            raise ValueError("A quantidade deve ser um número positivo e finito.")
+
+        item_key = name.casefold()
+        with closing(sqlite3.connect(self.database_path)) as connection:
+            with connection:
+                connection.execute("BEGIN IMMEDIATE")
+                row = connection.execute(
+                    """
+                    SELECT quantity
+                    FROM shopping_list
+                    WHERE user_id = ? AND item_key = ?
+                    """,
+                    (user_id, item_key),
+                ).fetchone()
+                if row is None:
+                    return None
+
+                listed_quantity = Decimal(row[0])
+                if quantity > listed_quantity:
+                    raise InsufficientListedQuantity
+
+                remaining_quantity = listed_quantity - quantity
+                if remaining_quantity == 0:
+                    connection.execute(
+                        """
+                        DELETE FROM shopping_list
+                        WHERE user_id = ? AND item_key = ?
+                        """,
+                        (user_id, item_key),
+                    )
+                else:
+                    connection.execute(
+                        """
+                        UPDATE shopping_list
+                        SET quantity = ?
+                        WHERE user_id = ? AND item_key = ?
+                        """,
+                        (str(remaining_quantity), user_id, item_key),
+                    )
+        return remaining_quantity
 
     @staticmethod
     def _validate_user_id(user_id: int) -> None:
