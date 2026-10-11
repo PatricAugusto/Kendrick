@@ -10,15 +10,21 @@ from telegram.ext import (
 from kendrick_bot.config import Settings
 from kendrick_bot.llm.ollama import OllamaClient
 from kendrick_bot.shopping.list_store import ShoppingListStore
+from kendrick_bot.shopping.pantry_store import PantryStore
 from kendrick_bot.telegram.handlers import (
     OLLAMA_CLIENT_KEY,
+    PANTRY_STORE_KEY,
     SHOPPING_STORE_KEY,
     ask_assistant,
     answer_item_check,
     cancel_item_check,
     mark_item_purchased,
+    remove_pantry_item,
+    set_pantry_consumption,
+    set_pantry_stock,
     show_help,
     show_list,
+    show_pantry,
     start,
 )
 
@@ -26,6 +32,7 @@ from kendrick_bot.telegram.handlers import (
 def build_application(settings: Settings) -> Application:
     application = Application.builder().token(settings.telegram_bot_token).build()
     application.bot_data[SHOPPING_STORE_KEY] = ShoppingListStore()
+    application.bot_data[PANTRY_STORE_KEY] = PantryStore()
     application.bot_data[OLLAMA_CLIENT_KEY] = OllamaClient(
         settings.ollama_base_url,
         settings.ollama_model,
@@ -49,6 +56,22 @@ def build_application(settings: Settings) -> Application:
     )
     application.add_handler(
         CommandHandler("lista", show_list, filters=authorized_user)
+    )
+    application.add_handler(
+        CommandHandler("despensa", show_pantry, filters=authorized_user)
+    )
+    application.add_handler(
+        CommandHandler("estoque", set_pantry_stock, filters=authorized_user)
+    )
+    application.add_handler(
+        CommandHandler("consumo", set_pantry_consumption, filters=authorized_user)
+    )
+    application.add_handler(
+        CommandHandler(
+            "remover_despensa",
+            remove_pantry_item,
+            filters=authorized_user,
+        )
     )
     application.add_handler(
         CommandHandler("comprado", mark_item_purchased, filters=authorized_user)

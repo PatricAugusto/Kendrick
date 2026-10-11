@@ -6,6 +6,7 @@
 kendrick_bot/
   config.py                 # lê e valida as configurações
   llm/ollama.py             # consulta um modelo local via Ollama
+  shopping/pantry_store.py  # persiste estoque e consumo da despensa
   telegram/
     application.py          # monta a aplicação e registra comandos
     handlers.py             # avalia itens e responde às mensagens
@@ -37,6 +38,24 @@ sugestões sobre compras, use `/perguntar <dúvida>`; por exemplo,
 `/perguntar como organizar as compras da semana?`. As respostas são geradas por
 um modelo local via Ollama. O assistente não consulta nem altera sua lista ou
 seu estoque; análises e alterações continuam seguindo o fluxo validado do bot.
+
+## Despensa pessoal
+
+Cadastre ou atualize o estoque atual com `/estoque <item> <quantidade>
+<unidade>`, por exemplo `/estoque arroz integral 2,5 kg`. O nome pode ter
+espaços e o estoque pode ser zero. Registre o consumo habitual diário com
+`/consumo <item> <quantidade> <unidade>/dia`, por exemplo
+`/consumo arroz integral 0,1 kg/dia`; primeiro, o item precisa existir na
+despensa. A unidade do consumo deve corresponder à unidade do estoque.
+
+Use `/despensa` para consultar os itens, estoque e consumo cadastrado. Use
+`/remover_despensa <item> confirmar` para excluir um registro após confirmação;
+isso não remove nem altera o item correspondente na lista de compras. Para
+trocar a unidade de um item, remova-o da despensa e cadastre-o novamente,
+incluindo o consumo habitual.
+Esses registros são persistidos no banco local e isolados por usuário do
+Telegram. Eles ainda não preenchem automaticamente a análise de estoque nem
+alteram a lista de compras.
 
 Instale o Ollama na máquina que executa o bot, inicie o serviço e baixe um
 modelo, por exemplo, no PowerShell:

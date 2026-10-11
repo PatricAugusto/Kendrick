@@ -3,8 +3,10 @@ from decimal import Decimal
 from unittest.mock import AsyncMock, Mock
 
 from kendrick_bot.llm.ollama import OllamaError
+from kendrick_bot.shopping.pantry_store import PantryItem
 from kendrick_bot.telegram.handlers import (
     OLLAMA_CLIENT_KEY,
+    PANTRY_STORE_KEY,
     PENDING_ANALYSIS_KEY,
     SHOPPING_STORE_KEY,
     PendingAnalysis,
@@ -13,8 +15,12 @@ from kendrick_bot.telegram.handlers import (
     ask_assistant,
     cancel_item_check,
     mark_item_purchased,
+    remove_pantry_item,
+    set_pantry_consumption,
+    set_pantry_stock,
     show_help,
     show_list,
+    show_pantry,
     start,
 )
 
@@ -33,6 +39,10 @@ def test_start_greets_and_lists_available_commands() -> None:
     assert "/perguntar <dúvida> —" in response
     assert "/lista —" in response
     assert "/comprado <item> <quantidade> —" in response
+    assert "/despensa —" in response
+    assert "/estoque <item> <quantidade> <unidade> —" in response
+    assert "/consumo <item> <quantidade> <unidade>/dia —" in response
+    assert "/remover_despensa <item> confirmar —" in response
     assert "/cancelar —" in response
     assert "consumo diário" in response
 
@@ -49,6 +59,10 @@ def test_help_lists_commands_and_usage() -> None:
     assert "/perguntar <dúvida> —" in response
     assert "/lista —" in response
     assert "/comprado <item> <quantidade> —" in response
+    assert "/despensa —" in response
+    assert "/estoque <item> <quantidade> <unidade> —" in response
+    assert "/consumo <item> <quantidade> <unidade>/dia —" in response
+    assert "/remover_despensa <item> confirmar —" in response
     assert "/cancelar —" in response
     assert "Se houver falta" in response
 
@@ -76,6 +90,244 @@ def make_command_context(store: Mock, args: list[str]) -> Mock:
         user_data={},
         bot_data={SHOPPING_STORE_KEY: store},
         args=args,
+    )
+
+
+def make_pantry_context(store: Mock, args: list[str]) -> Mock:
+    return Mock(
+        user_data={},
+        bot_data={PANTRY_STORE_KEY: store},
+        args=args,
+    )
+
+
+def test_show_pantry_displays_stock_and_consumption() -> None:
+    store = Mock()
+    store.get_items.return_value = [
+        PantryItem(
+            name="arroz",
+            quantity=Decimal("2.5"),
+            unit="kg",
+            daily_consumption=Decimal("0.1"),
+        ),
+        PantryItem(
+            name="leite",
+            quantity=Decimal("1"),
+            unit="L",
+            daily_consumption=None,
+        ),
+    ]
+    context = make_pantry_context(store, [])
+    update, reply_text = make_update("/despensa")
+
+    asyncio.run(show_pantry(update, context))
+
+    store.get_items.assert_called_once_with(123456)
+    reply_text.assert_awaited_once_with(
+        "Sua despensa:\n"
+        "- arroz: 2.5 kg; consumo: 0.1 kg/dia\n"
+        "- leite: 1 L; consumo: consumo não informado"
+    )
+
+
+def test_show_pantry_reports_empty_pantry() -> None:
+    store = Mock()
+    store.get_items.return_value = []
+    context = make_pantry_context(store, [])
+    update, reply_text = make_update("/despensa")
+
+    asyncio.run(show_pantry(update, context))
+
+    reply_text.assert_awaited_once()
+    assert "ainda não tem itens" in reply_text.await_args.args[0]
+
+
+def test_set_pantry_stock_accepts_multword_item_and_decimal_comma() -> None:
+    store = Mock()
+    store.set_stock.return_value = PantryItem(
+        name="arroz integral",
+        quantity=Decimal("2.5"),
+        unit="kg",
+        daily_consumption=None,
+    )
+    context = make_pantry_context(store, ["arroz", "integral", "2,5", "kg"])
+    update, reply_text = make_update("/estoque arroz integral 2,5 kg")
+
+    asyncio.run(set_pantry_stock(update, context))
+
+    store.set_stock.assert_called_once_with(
+        123456,
+        "arroz integral",
+        Decimal("2.5"),
+        "kg",
+    )
+    reply_text.assert_awaited_once_with("Estoque de arroz integral atualizado: 2.5 kg.")
+
+
+def test_set_pantry_stock_rejects_negative_quantity() -> None:
+    store = Mock()
+    context = make_pantry_context(store, ["arroz", "-1", "kg"])
+    update, reply_text = make_update("/estoque arroz -1 kg")
+
+    asyncio.run(set_pantry_stock(update, context))
+
+    store.set_stock.assert_not_called()
+    reply_text.assert_awaited_once()
+    assert "inválidos" in reply_text.await_args.args[0]
+
+
+def test_set_pantry_stock_reports_unsafe_precision_or_magnitude() -> None:
+    from kendrick_bot.shopping.pantry_store import PantryInvalidQuantity
+
+    store = Mock()
+    store.set_stock.side_effect = PantryInvalidQuantity
+    context = make_pantry_context(store, ["arroz", "1e100", "kg"])
+    update, reply_text = make_update("/estoque arroz 1e100 kg")
+
+    asyncio.run(set_pantry_stock(update, context))
+
+    reply_text.assert_awaited_once()
+    assert "seis casas decimais" in reply_text.await_args.args[0]
+
+
+def test_set_pantry_stock_reports_unit_mismatch() -> None:
+    from kendrick_bot.shopping.pantry_store import PantryUnitMismatch
+
+    store = Mock()
+    store.set_stock.side_effect = PantryUnitMismatch
+    context = make_pantry_context(store, ["arroz", "2", "unidades"])
+    update, reply_text = make_update("/estoque arroz 2 unidades")
+
+    asyncio.run(set_pantry_stock(update, context))
+
+    reply_text.assert_awaited_once()
+    assert "outra unidade" in reply_text.await_args.args[0]
+
+
+def test_set_pantry_consumption_requires_daily_period() -> None:
+    store = Mock()
+    context = make_pantry_context(store, ["arroz", "0,1", "kg"])
+    update, reply_text = make_update("/consumo arroz 0,1 kg")
+
+    asyncio.run(set_pantry_consumption(update, context))
+
+    store.set_daily_consumption.assert_not_called()
+    reply_text.assert_awaited_once()
+    assert "por dia" in reply_text.await_args.args[0]
+
+
+def test_set_pantry_consumption_rejects_zero() -> None:
+    store = Mock()
+    context = make_pantry_context(store, ["arroz", "0", "kg/dia"])
+    update, reply_text = make_update("/consumo arroz 0 kg/dia")
+
+    asyncio.run(set_pantry_consumption(update, context))
+
+    store.set_daily_consumption.assert_not_called()
+    reply_text.assert_awaited_once()
+    assert "maior que zero" in reply_text.await_args.args[0]
+
+
+def test_set_pantry_consumption_stores_daily_amount() -> None:
+    store = Mock()
+    store.set_daily_consumption.return_value = PantryItem(
+        name="arroz",
+        quantity=Decimal("2"),
+        unit="kg",
+        daily_consumption=Decimal("0.1"),
+    )
+    context = make_pantry_context(store, ["arroz", "0,1", "kg/dia"])
+    update, reply_text = make_update("/consumo arroz 0,1 kg/dia")
+
+    asyncio.run(set_pantry_consumption(update, context))
+
+    store.set_daily_consumption.assert_called_once_with(
+        123456,
+        "arroz",
+        Decimal("0.1"),
+        "kg",
+    )
+    reply_text.assert_awaited_once_with(
+        "Consumo diário de arroz atualizado: 0.1 kg/dia."
+    )
+
+
+def test_set_pantry_consumption_requires_item_to_be_registered() -> None:
+    from kendrick_bot.shopping.pantry_store import PantryItemNotFound
+
+    store = Mock()
+    store.set_daily_consumption.side_effect = PantryItemNotFound
+    context = make_pantry_context(store, ["arroz", "0,1", "kg/dia"])
+    update, reply_text = make_update("/consumo arroz 0,1 kg/dia")
+
+    asyncio.run(set_pantry_consumption(update, context))
+
+    reply_text.assert_awaited_once()
+    assert "Cadastre primeiro" in reply_text.await_args.args[0]
+
+
+def test_remove_pantry_item_removes_registered_entry() -> None:
+    store = Mock()
+    store.remove_item.return_value = True
+    context = make_pantry_context(store, ["arroz", "integral", "confirmar"])
+    update, reply_text = make_update("/remover_despensa arroz integral confirmar")
+
+    asyncio.run(remove_pantry_item(update, context))
+
+    store.remove_item.assert_called_once_with(123456, "arroz integral")
+    reply_text.assert_awaited_once()
+    assert "não altera sua lista de compras" in reply_text.await_args.args[0]
+
+
+def test_remove_pantry_item_reports_unknown_entry() -> None:
+    store = Mock()
+    store.remove_item.return_value = False
+    context = make_pantry_context(store, ["arroz", "confirmar"])
+    update, reply_text = make_update("/remover_despensa arroz confirmar")
+
+    asyncio.run(remove_pantry_item(update, context))
+
+    reply_text.assert_awaited_once()
+    assert "não está cadastrado" in reply_text.await_args.args[0]
+
+
+def test_remove_pantry_item_requires_explicit_confirmation() -> None:
+    store = Mock()
+    context = make_pantry_context(store, ["arroz"])
+    update, reply_text = make_update("/remover_despensa arroz")
+
+    asyncio.run(remove_pantry_item(update, context))
+
+    store.remove_item.assert_not_called()
+    reply_text.assert_awaited_once()
+    assert "confirmar" in reply_text.await_args.args[0]
+
+
+def test_pantry_command_handlers_persist_data_end_to_end(tmp_path) -> None:
+    from kendrick_bot.shopping.pantry_store import PantryStore
+
+    store = PantryStore(tmp_path / "kendrick.sqlite3")
+    stock_context = make_pantry_context(store, ["arroz", "2,5", "kg"])
+    stock_update, stock_reply = make_update("/estoque arroz 2,5 kg")
+    asyncio.run(set_pantry_stock(stock_update, stock_context))
+
+    consumption_context = make_pantry_context(
+        store,
+        ["arroz", "0,1", "kg/dia"],
+    )
+    consumption_update, consumption_reply = make_update(
+        "/consumo arroz 0,1 kg/dia"
+    )
+    asyncio.run(set_pantry_consumption(consumption_update, consumption_context))
+
+    pantry_context = make_pantry_context(PantryStore(store.database_path), [])
+    pantry_update, pantry_reply = make_update("/despensa")
+    asyncio.run(show_pantry(pantry_update, pantry_context))
+
+    stock_reply.assert_awaited_once()
+    consumption_reply.assert_awaited_once()
+    pantry_reply.assert_awaited_once_with(
+        "Sua despensa:\n- arroz: 2.5 kg; consumo: 0.1 kg/dia"
     )
 
 
