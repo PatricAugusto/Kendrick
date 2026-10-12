@@ -40,7 +40,7 @@ from kendrick_bot.telegram.handlers import (
 )
 
 
-def test_start_greets_and_lists_available_commands() -> None:
+def test_start_gives_a_short_welcome_and_points_to_help() -> None:
     update, reply_text = make_update("/start")
 
     asyncio.run(start(update, Mock()))
@@ -48,37 +48,26 @@ def test_start_greets_and_lists_available_commands() -> None:
     reply_text.assert_awaited_once()
     response = reply_text.await_args.args[0]
     assert response.startswith("Oi! Sou o Kendrick")
-    assert "Como posso ajudar?" in response
-    assert "🧺 DESPENSA" in response
-    assert "🛒 COMPRAS" in response
-    assert "/start —" in response
-    assert "/ajuda —" in response
-    assert "/perguntar <dúvida> —" in response
-    assert "/lista —" in response
-    assert "/comprado <item> <quantidade> —" in response
-    assert "/despensa —" in response
-    assert "/estoque <item> <quantidade> <unidade> —" in response
-    assert "/consumo <item> <quantidade> <unidade>/dia —" in response
-    assert "/usei <item> <quantidade> —" in response
-    assert "/remover_despensa <item> confirmar —" in response
-    assert "/planejar <dias> —" in response
-    assert "/prioridades —" in response
-    assert "/historico [dias] —" in response
-    assert "/cancelar —" in response
-    assert "consumo diário" in response
+    assert "Vamos simplificar suas compras." in response
+    assert "Envie o nome de um item" in response
+    assert "Use /lista" in response
+    assert "Use /despensa" in response
+    assert "/ajuda" in response
+    assert "COMPRAS" not in response
+    assert "/comprado" not in response
 
 
-def test_help_lists_commands_and_usage() -> None:
+def test_help_lists_commands_in_concise_categories() -> None:
     update, reply_text = make_update("/ajuda")
 
     asyncio.run(show_help(update, Mock()))
 
     reply_text.assert_awaited_once()
     response = reply_text.await_args.args[0]
-    assert "Como posso ajudar?" in response
-    assert "🧺 DESPENSA" in response
-    assert "🛒 COMPRAS" in response
-    assert "/ajuda —" in response
+    assert "Comandos do Kendrick" in response
+    assert "DESPENSA" in response
+    assert "COMPRAS" in response
+    assert "AJUDA" in response
     assert "/perguntar <dúvida> —" in response
     assert "/lista —" in response
     assert "/comprado <item> <quantidade> —" in response

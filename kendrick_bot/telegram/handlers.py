@@ -36,27 +36,24 @@ PANTRY_STORE_KEY = "pantry_store"
 PENDING_PLAN_KEY = "pending_purchase_plan"
 AUTHORIZED_USER_IDS_KEY = "authorized_user_ids"
 HELP_TEXT = (
-    "Como posso ajudar?\n\n"
-    "🧺 DESPENSA\n"
-    "/despensa — ver seus itens e estoques.\n"
+    "Comandos do Kendrick\n\n"
+    "DESPENSA\n"
+    "/despensa — consultar seus itens e estoques.\n"
     "/estoque <item> <quantidade> <unidade> — atualizar estoque.\n"
-    "/consumo <item> <quantidade> <unidade>/dia — definir consumo.\n"
-    "/usei <item> <quantidade> — registrar consumo da despensa.\n"
+    "/consumo <item> <quantidade> <unidade>/dia — informar consumo diário.\n"
+    "/usei <item> <quantidade> — registrar uma retirada.\n"
     "/remover_despensa <item> confirmar — remover um item.\n\n"
-    "🛒 COMPRAS\n"
+    "COMPRAS\n"
+    "/lista — consultar sua lista.\n"
+    "/comprado <item> <quantidade> — registrar uma compra.\n"
     "/planejar <dias> — prever o que pode faltar.\n"
     "/prioridades — ver o que deve acabar primeiro.\n"
-    "/lista — ver sua lista de compras.\n"
-    "/comprado <item> <quantidade> — registrar uma compra.\n"
     "/historico [dias] — consultar compras (padrão: 30 dias).\n\n"
-    "💬 AJUDA\n"
-    "/start — abrir esta apresentação.\n"
-    "/ajuda — consultar os comandos novamente.\n"
+    "AJUDA\n"
     "/perguntar <dúvida> — pedir uma sugestão.\n"
     "/cancelar — interromper o fluxo atual.\n\n"
-    "Dica: envie o nome de um item para iniciar uma análise de estoque. "
-    "Use /consumo para cadastrar o consumo diário e mantenha a mesma unidade "
-    "no estoque e no consumo (por exemplo, kg). "
+    "Para analisar um item, envie o nome dele na conversa. "
+    "Use a mesma unidade no estoque e no consumo (por exemplo, kg). "
     "Sugestões de planejamento só entram na lista com sua confirmação."
 )
 
@@ -90,8 +87,11 @@ async def start(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
 
     await update.message.reply_text(
         "Oi! Sou o Kendrick 👋\n"
-        "Vamos deixar suas compras mais simples.\n\n"
-        + HELP_TEXT
+        "Vamos simplificar suas compras.\n\n"
+        "• Envie o nome de um item para estimar o que pode faltar.\n"
+        "• Use /lista para ver suas compras.\n"
+        "• Use /despensa para consultar seu estoque.\n\n"
+        "Envie /ajuda para ver todos os comandos."
     )
 
 
