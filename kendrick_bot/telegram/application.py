@@ -22,6 +22,7 @@ from kendrick_bot.telegram.handlers import (
     cancel_item_check,
     mark_item_purchased,
     plan_purchases,
+    recommend_purchases,
     record_pantry_consumption,
     remove_pantry_item,
     set_pantry_consumption,
@@ -98,6 +99,13 @@ def build_application(settings: Settings) -> Application:
         CommandHandler("planejar", plan_purchases, filters=authorized_user)
     )
     application.add_handler(
+        CommandHandler(
+            "kendrickindica",
+            recommend_purchases,
+            filters=authorized_user,
+        )
+    )
+    application.add_handler(
         CommandHandler("historico", show_purchase_history, filters=authorized_user)
     )
     application.add_handler(
@@ -106,7 +114,7 @@ def build_application(settings: Settings) -> Application:
     application.add_handler(
         CallbackQueryHandler(
             handle_confirmation_callback,
-            pattern=r"^(plan|analysis):(yes|no)$",
+            pattern=r"^(plan|analysis|suggestions):(yes|no)$",
         )
     )
     application.add_handler(

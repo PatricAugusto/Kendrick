@@ -13,7 +13,11 @@ from telegram import (
 )
 from telegram.ext import ContextTypes
 
-from kendrick_bot.llm.ollama import OllamaClient, OllamaError
+from kendrick_bot.llm.ollama import (
+    OllamaClient,
+    OllamaError,
+    PurchaseSuggestion,
+)
 from kendrick_bot.shopping.forecast import StockForecast, forecast_stock
 from kendrick_bot.shopping.pantry_store import (
     PantryInsufficientStock,
@@ -34,6 +38,7 @@ SHOPPING_STORE_KEY = "shopping_list_store"
 OLLAMA_CLIENT_KEY = "ollama_client"
 PANTRY_STORE_KEY = "pantry_store"
 PENDING_PLAN_KEY = "pending_purchase_plan"
+PENDING_SUGGESTIONS_KEY = "pending_purchase_suggestions"
 AUTHORIZED_USER_IDS_KEY = "authorized_user_ids"
 HELP_TEXT = (
     "Comandos do Kendrick\n\n"
@@ -47,6 +52,7 @@ HELP_TEXT = (
     "/lista — consultar sua lista.\n"
     "/comprado <item> <quantidade> — registrar uma compra.\n"
     "/planejar <dias> — prever o que pode faltar.\n"
+    "/kendrickindica <pedido> — montar sugestões para sua lista.\n"
     "/prioridades — ver o que deve acabar primeiro.\n"
     "/historico [dias] — consultar compras (padrão: 30 dias).\n\n"
     "AJUDA\n"
@@ -81,6 +87,11 @@ class PendingPurchasePlan:
     shortages: tuple[PlannedShortage, ...]
 
 
+@dataclass(frozen=True)
+class PendingPurchaseSuggestions:
+    items: tuple[PurchaseSuggestion, ...]
+
+
 async def start(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
     if update.message is None:
         return
@@ -89,6 +100,7 @@ async def start(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
         "Oi! Sou o Kendrick 👋\n"
         "Vamos simplificar suas compras.\n\n"
         "• Envie o nome de um item para estimar o que pode faltar.\n"
+        "• Use /kendrickindica para montar uma lista para uma ocasião.\n"
         "• Use /lista para ver suas compras.\n"
         "• Use /despensa para consultar seu estoque.\n\n"
         "Envie /ajuda para ver todos os comandos."
@@ -278,9 +290,15 @@ async def plan_purchases(
             "Sua despensa está vazia. Cadastre itens com /estoque antes de planejar."
         )
         return
-    if isinstance(context.user_data.get(PENDING_ANALYSIS_KEY), PendingAnalysis):
+    if (
+        isinstance(context.user_data.get(PENDING_ANALYSIS_KEY), PendingAnalysis)
+        or isinstance(
+            context.user_data.get(PENDING_SUGGESTIONS_KEY),
+            PendingPurchaseSuggestions,
+        )
+    ):
         await update.message.reply_text(
-            "Há uma análise de estoque em andamento. Use /cancelar antes de iniciar "
+            "Há outro fluxo de compras em andamento. Use /cancelar antes de iniciar "
             "um planejamento."
         )
         return
@@ -373,6 +391,21 @@ async def handle_confirmation_callback(
             context,
             "sim" if query.data == "plan:yes" else "não",
             pending_plan,
+            query.from_user.id,
+        )
+        return
+
+    if query.data in {"suggestions:yes", "suggestions:no"}:
+        pending_suggestions = context.user_data.get(PENDING_SUGGESTIONS_KEY)
+        if not isinstance(pending_suggestions, PendingPurchaseSuggestions):
+            await query.answer("Essa confirmação não está mais ativa.", show_alert=True)
+            return
+        await query.answer()
+        await _answer_purchase_suggestions(
+            query.message,
+            context,
+            "sim" if query.data == "suggestions:yes" else "não",
+            pending_suggestions,
             query.from_user.id,
         )
         return
@@ -628,6 +661,100 @@ async def ask_assistant(
     await update.message.reply_text(answer)
 
 
+async def recommend_purchases(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    if update.message is None:
+        return
+
+    request = " ".join(context.args).strip()
+    if not request:
+        await update.message.reply_text(
+            "Descreva o que você está planejando comprar. "
+            "Exemplo: /kendrickindica jantar para 4 pessoas no fim de semana."
+        )
+        return
+
+    if any(
+        isinstance(context.user_data.get(key), pending_type)
+        for key, pending_type in (
+            (PENDING_ANALYSIS_KEY, PendingAnalysis),
+            (PENDING_PLAN_KEY, PendingPurchasePlan),
+            (PENDING_SUGGESTIONS_KEY, PendingPurchaseSuggestions),
+        )
+    ):
+        await update.message.reply_text(
+            "Há outro fluxo de compras em andamento. Use /cancelar antes de pedir "
+            "novas sugestões."
+        )
+        return
+
+    user = update.effective_user
+    if user is None:
+        raise RuntimeError("Não foi possível identificar o usuário da mensagem.")
+
+    pantry: PantryStore = context.bot_data[PANTRY_STORE_KEY]
+    shopping: ShoppingListStore = context.bot_data[SHOPPING_STORE_KEY]
+    pantry_items = pantry.get_items(user.id)
+    shopping_items = shopping.get_items(user.id)
+    pantry_context = (
+        "\n".join(
+            f"- {item.name}: {_format_quantity(item.quantity)} {item.unit}"
+            + (
+                f"; consumo {_format_quantity(item.daily_consumption)} "
+                f"{item.unit}/dia"
+                if item.daily_consumption is not None
+                else ""
+            )
+            for item in pantry_items
+        )
+        or "vazia"
+    )
+    shopping_context = (
+        "\n".join(
+            f"- {item.name}: {_format_quantity(item.quantity)}"
+            + (f" {item.unit}" if item.unit else "")
+            for item in shopping_items
+        )
+        or "vazia"
+    )
+    client: OllamaClient = context.bot_data[OLLAMA_CLIENT_KEY]
+    try:
+        suggestions = await client.suggest_purchases(
+            request,
+            f"Despensa:\n{pantry_context}\n\nLista de compras:\n{shopping_context}",
+        )
+    except OllamaError:
+        await update.message.reply_text(
+            "Não consegui montar sugestões confiáveis. Confira se o Ollama está "
+            "aberto e se o modelo configurado está instalado; depois, tente "
+            "descrever seu pedido de outra forma."
+        )
+        return
+
+    if not suggestions:
+        await update.message.reply_text(
+            "Não encontrei itens para sugerir com esse pedido. "
+            "Tente informar a ocasião, quantas pessoas e o que você pretende fazer."
+        )
+        return
+
+    context.user_data[PENDING_SUGGESTIONS_KEY] = PendingPurchaseSuggestions(
+        items=tuple(suggestions),
+    )
+    details = "\n".join(
+        f"• {item.name} — {_format_quantity(item.quantity)}"
+        + (f" {item.unit}" if item.unit else "")
+        for item in suggestions
+    )
+    await update.message.reply_text(
+        "✨ Sugestões do Kendrick\n\n"
+        f"{details}\n\nAdicionar à sua lista? Nada será incluído sem sua confirmação.",
+        reply_markup=_yes_no_keyboard("suggestions"),
+    )
+
+
 async def answer_item_check(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
@@ -638,6 +765,20 @@ async def answer_item_check(
     text = update.message.text.strip()
     if not text:
         await update.message.reply_text("Envie o nome de um item para analisar.")
+        return
+
+    pending_suggestions = context.user_data.get(PENDING_SUGGESTIONS_KEY)
+    if isinstance(pending_suggestions, PendingPurchaseSuggestions):
+        user = update.effective_user
+        if user is None:
+            raise RuntimeError("Não foi possível identificar o usuário da mensagem.")
+        await _answer_purchase_suggestions(
+            update.message,
+            context,
+            text,
+            pending_suggestions,
+            user.id,
+        )
         return
 
     pending_plan = context.user_data.get(PENDING_PLAN_KEY)
@@ -799,6 +940,45 @@ async def _answer_purchase_plan(
         (item.name, item.quantity, item.unit)
         for item in pending.shortages
     ]
+    await _add_items_to_shopping_list(message, store, user_id, additions)
+
+
+async def _answer_purchase_suggestions(
+    message: Message,
+    context: ContextTypes.DEFAULT_TYPE,
+    answer_text: str,
+    pending: PendingPurchaseSuggestions,
+    user_id: int,
+) -> None:
+    answer = _normalize_answer(answer_text)
+    if answer not in {"sim", "s", "não", "nao", "n"}:
+        await message.reply_text(
+            "Responda Sim para adicionar as sugestões à lista ou Não para "
+            "descartá-las."
+        )
+        return
+
+    context.user_data.pop(PENDING_SUGGESTIONS_KEY, None)
+    if answer in {"não", "nao", "n"}:
+        await message.reply_text(
+            "Tudo certo — descartei as sugestões e mantive sua lista como estava."
+        )
+        return
+
+    store: ShoppingListStore = context.bot_data[SHOPPING_STORE_KEY]
+    additions = [
+        (item.name, item.quantity, item.unit)
+        for item in pending.items
+    ]
+    await _add_items_to_shopping_list(message, store, user_id, additions)
+
+
+async def _add_items_to_shopping_list(
+    message: Message,
+    store: ShoppingListStore,
+    user_id: int,
+    additions: list[tuple[str, Decimal, str | None]],
+) -> None:
     try:
         totals = store.add_quantities(user_id, additions)
     except ShoppingListUnitMismatch:
@@ -810,17 +990,14 @@ async def _answer_purchase_plan(
     except ValueError:
         await message.reply_text(
             "Não alterei a lista: uma quantidade acumulada excede o limite. "
-            "Revise os dados e tente novamente."
+            "Revise as sugestões e tente novamente."
         )
         return
-
     details = "\n".join(
-        f"- {item.name}: {_format_quantity(total)} {item.unit}"
-        for item, total in zip(pending.shortages, totals, strict=True)
+        f"- {name}: {_format_quantity(total)}" + (f" {unit}" if unit else "")
+        for (name, _, unit), total in zip(additions, totals, strict=True)
     )
-    await message.reply_text(
-        f"✅ Adicionado à sua lista\n\n{details}"
-    )
+    await message.reply_text(f"✅ Adicionado à sua lista\n\n{details}")
 
 
 def _yes_no_keyboard(action: str) -> InlineKeyboardMarkup:
@@ -938,6 +1115,10 @@ async def cancel_item_check(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
     pending = context.user_data.pop(PENDING_ANALYSIS_KEY, None)
     pending_plan = context.user_data.pop(PENDING_PLAN_KEY, None)
+    pending_suggestions = context.user_data.pop(PENDING_SUGGESTIONS_KEY, None)
+    if isinstance(pending_suggestions, PendingPurchaseSuggestions):
+        await update.message.reply_text("As sugestões de compra foram canceladas.")
+        return
     if isinstance(pending_plan, PendingPurchasePlan):
         await update.message.reply_text("O planejamento foi cancelado.")
         return

@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, Mock
 
 from telegram import CallbackQuery, Chat, Message, Update, User
 
-from kendrick_bot.llm.ollama import OllamaError
+from kendrick_bot.llm.ollama import OllamaError, PurchaseSuggestion
 from kendrick_bot.shopping.pantry_store import PantryItem
 from kendrick_bot.shopping.list_store import PurchaseRecord, ShoppingListUnitMismatch
 from kendrick_bot.shopping.pantry_store import PantryStore
@@ -15,9 +15,11 @@ from kendrick_bot.telegram.handlers import (
     OLLAMA_CLIENT_KEY,
     PANTRY_STORE_KEY,
     PENDING_ANALYSIS_KEY,
+    PENDING_SUGGESTIONS_KEY,
     SHOPPING_STORE_KEY,
     PendingAnalysis,
     PendingPurchasePlan,
+    PendingPurchaseSuggestions,
     PlannedShortage,
     ShoppingListItem,
     answer_item_check,
@@ -27,6 +29,7 @@ from kendrick_bot.telegram.handlers import (
     mark_item_purchased,
     PENDING_PLAN_KEY,
     plan_purchases,
+    recommend_purchases,
     remove_pantry_item,
     set_pantry_consumption,
     set_pantry_stock,
@@ -77,6 +80,7 @@ def test_help_lists_commands_in_concise_categories() -> None:
     assert "/usei <item> <quantidade> —" in response
     assert "/remover_despensa <item> confirmar —" in response
     assert "/planejar <dias> —" in response
+    assert "/kendrickindica <pedido> —" in response
     assert "/prioridades —" in response
     assert "/historico [dias] —" in response
     assert "/cancelar —" in response
@@ -832,6 +836,213 @@ def test_ask_assistant_reports_local_model_unavailable() -> None:
 
     reply_text.assert_awaited_once()
     assert "Ollama" in reply_text.await_args.args[0]
+
+
+def test_recommend_purchases_shows_contextual_suggestions_for_confirmation() -> None:
+    pantry = Mock()
+    pantry.get_items.return_value = [
+        PantryItem("arroz", Decimal("1"), "kg", Decimal("0.1"))
+    ]
+    shopping = Mock()
+    shopping.get_items.return_value = [
+        ShoppingListItem("leite", Decimal("2"), "L")
+    ]
+    client = Mock()
+    client.suggest_purchases = AsyncMock(
+        return_value=[
+            PurchaseSuggestion("tomates", Decimal("4"), "un"),
+            PurchaseSuggestion("azeite", Decimal("1"), "L"),
+        ]
+    )
+    context = Mock(
+        user_data={},
+        bot_data={
+            PANTRY_STORE_KEY: pantry,
+            SHOPPING_STORE_KEY: shopping,
+            OLLAMA_CLIENT_KEY: client,
+        },
+        args=["jantar", "para", "4", "pessoas"],
+    )
+    update, reply_text = make_update(
+        "/kendrickindica jantar para 4 pessoas"
+    )
+
+    asyncio.run(recommend_purchases(update, context))
+
+    client.suggest_purchases.assert_awaited_once()
+    call_args = client.suggest_purchases.await_args.args
+    assert call_args[0] == "jantar para 4 pessoas"
+    assert "arroz: 1 kg; consumo 0.1 kg/dia" in call_args[1]
+    assert "leite: 2 L" in call_args[1]
+    response = reply_text.await_args.args[0]
+    assert "tomates — 4 un" in response
+    assert "azeite — 1 L" in response
+    assert "Nada será incluído sem sua confirmação." in response
+    keyboard = reply_text.await_args.kwargs["reply_markup"]
+    assert keyboard.inline_keyboard[0][0].callback_data == "suggestions:yes"
+    assert keyboard.inline_keyboard[0][1].callback_data == "suggestions:no"
+    assert isinstance(
+        context.user_data[PENDING_SUGGESTIONS_KEY],
+        PendingPurchaseSuggestions,
+    )
+    shopping.add_quantities.assert_not_called()
+
+
+def test_recommend_purchases_requires_a_request() -> None:
+    client = Mock()
+    context = Mock(
+        user_data={},
+        bot_data={OLLAMA_CLIENT_KEY: client},
+        args=[],
+    )
+    update, reply_text = make_update("/kendrickindica")
+
+    asyncio.run(recommend_purchases(update, context))
+
+    client.suggest_purchases.assert_not_called()
+    reply_text.assert_awaited_once()
+    assert "/kendrickindica" in reply_text.await_args.args[0]
+
+
+def test_recommend_purchases_reports_model_errors() -> None:
+    pantry = Mock()
+    pantry.get_items.return_value = []
+    shopping = Mock()
+    shopping.get_items.return_value = []
+    client = Mock()
+    client.suggest_purchases = AsyncMock(side_effect=OllamaError("invalid"))
+    context = Mock(
+        user_data={},
+        bot_data={
+            PANTRY_STORE_KEY: pantry,
+            SHOPPING_STORE_KEY: shopping,
+            OLLAMA_CLIENT_KEY: client,
+        },
+        args=["jantar"],
+    )
+    update, reply_text = make_update("/kendrickindica jantar")
+
+    asyncio.run(recommend_purchases(update, context))
+
+    reply_text.assert_awaited_once()
+    assert "sugestões confiáveis" in reply_text.await_args.args[0]
+    assert PENDING_SUGGESTIONS_KEY not in context.user_data
+
+
+def test_recommendation_confirmation_adds_suggestions_to_list() -> None:
+    shopping = Mock()
+    shopping.add_quantities.return_value = [Decimal("3"), Decimal("1")]
+    pending = PendingPurchaseSuggestions(
+        items=(
+            PurchaseSuggestion("tomates", Decimal("2"), "un"),
+            PurchaseSuggestion("azeite", Decimal("1"), None),
+        ),
+    )
+    context = Mock(
+        user_data={PENDING_SUGGESTIONS_KEY: pending},
+        bot_data={SHOPPING_STORE_KEY: shopping},
+    )
+    update, reply_text = make_update("Sim")
+
+    asyncio.run(answer_item_check(update, context))
+
+    shopping.add_quantities.assert_called_once_with(
+        123456,
+        [
+            ("tomates", Decimal("2"), "un"),
+            ("azeite", Decimal("1"), None),
+        ],
+    )
+    assert PENDING_SUGGESTIONS_KEY not in context.user_data
+    reply_text.assert_awaited_once_with(
+        "✅ Adicionado à sua lista\n\n"
+        "- tomates: 3 un\n"
+        "- azeite: 1"
+    )
+
+
+def test_recommendation_inline_confirmation_adds_suggestions(monkeypatch) -> None:
+    reply_text = AsyncMock()
+    answer_callback = AsyncMock()
+    monkeypatch.setattr(Message, "reply_text", reply_text)
+    monkeypatch.setattr(CallbackQuery, "answer", answer_callback)
+    user = User(id=123456, is_bot=False, first_name="Test")
+    message = Message(
+        message_id=1,
+        date=datetime.now(timezone.utc),
+        chat=Chat(id=123456, type=Chat.PRIVATE),
+        from_user=user,
+        text="Adicionar à sua lista?",
+    )
+    update = Update(
+        update_id=3,
+        callback_query=CallbackQuery(
+            id="callback-suggestions",
+            from_user=user,
+            chat_instance="chat-instance",
+            message=message,
+            data="suggestions:yes",
+        ),
+    )
+    shopping = Mock()
+    shopping.add_quantities.return_value = [Decimal("2")]
+    context = Mock(
+        user_data={
+            PENDING_SUGGESTIONS_KEY: PendingPurchaseSuggestions(
+                items=(PurchaseSuggestion("tomates", Decimal("2"), "un"),),
+            )
+        },
+        bot_data={
+            AUTHORIZED_USER_IDS_KEY: frozenset({123456}),
+            SHOPPING_STORE_KEY: shopping,
+        },
+    )
+
+    asyncio.run(handle_confirmation_callback(update, context))
+
+    answer_callback.assert_awaited_once_with()
+    shopping.add_quantities.assert_called_once_with(
+        123456,
+        [("tomates", Decimal("2"), "un")],
+    )
+    assert PENDING_SUGGESTIONS_KEY not in context.user_data
+    reply_text.assert_awaited_once_with(
+        "✅ Adicionado à sua lista\n\n- tomates: 2 un"
+    )
+
+
+def test_declining_recommendations_does_not_change_list() -> None:
+    shopping = Mock()
+    context = Mock(
+        user_data={
+            PENDING_SUGGESTIONS_KEY: PendingPurchaseSuggestions(
+                items=(PurchaseSuggestion("tomates", Decimal("2"), "un"),),
+            )
+        },
+        bot_data={SHOPPING_STORE_KEY: shopping},
+    )
+    update, reply_text = make_update("Não")
+
+    asyncio.run(answer_item_check(update, context))
+
+    shopping.add_quantities.assert_not_called()
+    assert PENDING_SUGGESTIONS_KEY not in context.user_data
+    reply_text.assert_awaited_once_with(
+        "Tudo certo — descartei as sugestões e mantive sua lista como estava."
+    )
+
+
+def test_cancel_clears_purchase_suggestions() -> None:
+    context = make_context(Mock())
+    context.user_data[PENDING_SUGGESTIONS_KEY] = PendingPurchaseSuggestions(
+        items=(PurchaseSuggestion("tomates", Decimal("2"), "un"),),
+    )
+    update, reply_text = make_update("/cancelar")
+
+    asyncio.run(cancel_item_check(update, context))
+
+    assert PENDING_SUGGESTIONS_KEY not in context.user_data
+    reply_text.assert_awaited_once_with("As sugestões de compra foram canceladas.")
 
 
 def test_enough_stock_produces_analysis_without_adding_to_list() -> None:

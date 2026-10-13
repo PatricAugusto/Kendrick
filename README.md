@@ -33,13 +33,17 @@ que a da lista. Use `/cancelar` para interromper uma análise.
 
 Ao executar `/start`, o Kendrick mostra uma saudação com as ações mais comuns.
 Use `/ajuda` para consultar todos os comandos, organizados por despensa, compras
-e ajuda. As confirmações de análise e planejamento oferecem botões para aprovar
-ou recusar; também é possível responder Sim ou Não por texto.
+e ajuda. As confirmações de análise, planejamento e sugestões oferecem botões
+para aprovar ou recusar; também é possível responder Sim ou Não por texto.
+Use `/kendrickindica <pedido>` para receber sugestões personalizadas para uma
+ocasião, como `/kendrickindica jantar para 4 pessoas no fim de semana`. O
+Kendrick considera o pedido, a despensa e a lista atual; as sugestões só são
+incluídas na lista após confirmação. Esse comando usa o modelo local via Ollama.
 Para dúvidas e
 sugestões sobre compras, use `/perguntar <dúvida>`; por exemplo,
 `/perguntar como organizar as compras da semana?`. As respostas são geradas por
-um modelo local via Ollama. O assistente não consulta nem altera sua lista ou
-seu estoque; análises e alterações continuam seguindo o fluxo validado do bot.
+um modelo local via Ollama. `/perguntar` continua sendo um assistente de dúvidas
+e não consulta nem altera sua lista ou seu estoque.
 
 ## Despensa pessoal
 
@@ -83,6 +87,11 @@ são apresentados em UTC. Para que o estoque atual reflita a compra, atualize-o
 separadamente com `/estoque <item> <quantidade> <unidade>`; marcar como comprado
 não altera automaticamente a despensa.
 
+`/planejar <dias>` calcula reposições usando o consumo e o estoque cadastrados.
+Já `/kendrickindica <pedido>` gera ideias contextuais com o modelo local, usando
+a despensa e a lista atual como referência; revise e confirme as sugestões antes
+de adicioná-las. Nenhum desses comandos altera a lista sem confirmação.
+
 Instale o Ollama na máquina que executa o bot, inicie o serviço e baixe um
 modelo, por exemplo, no PowerShell:
 
@@ -93,7 +102,7 @@ ollama pull llama3.2
 `OLLAMA_BASE_URL` e `OLLAMA_MODEL` são configurações opcionais no `.env`; por
 padrão, o Kendrick usa `http://localhost:11434` e `llama3.2`. Se o Ollama
 estiver indisponível, os outros comandos do bot continuam funcionando e
-`/perguntar` informa que não conseguiu obter resposta.
+`/perguntar` e `/kendrickindica` informam que não conseguiram obter resposta.
 
 A análise em andamento fica somente na memória do processo e é apagada quando o
 bot é reiniciado. A lista de compras é salva localmente no arquivo
