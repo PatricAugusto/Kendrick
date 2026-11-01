@@ -58,15 +58,21 @@ HELP_TEXT = (
     "Como posso ajudar?\n\n"
     "Use os botões para abrir sua lista, despensa ou planejar os próximos "
     "7 dias. Envie o nome de um item para estimar a reposição.\n\n"
-    "Para atualizar dados:\n"
-    "• Despensa: /estoque <item> <quantidade> <unidade>, "
-    "/consumo <item> <quantidade> <unidade>/dia ou /usei <item> <quantidade>.\n"
-    "• Compras: /comprado <item> <quantidade>, "
-    "/planejar <dias> ou /kendrickindica <pedido>.\n"
-    "• Outras opções: /prioridades, /historico, /perguntar e "
-    "/remover_despensa.\n"
-    "Use /cancelar para interromper um fluxo. Planejamentos e sugestões só "
-    "alteram a lista após sua confirmação."
+    "🧺 Despensa:\n\n"
+    "/estoque <item> <quantidade> <unidade>\n\n"
+    "/consumo <item> <quantidade> <unidade>/dia\n\n"
+    "/usei <item> <quantidade>\n\n"
+    "/remover_despensa <item> confirmar\n\n"
+    "🛒 Compras:\n\n"
+    "/comprado <item> <quantidade>\n\n"
+    "/planejar <dias>\n\n"
+    "/kendrickindica <pedido>\n\n"
+    "📋 Outros:\n\n"
+    "/prioridades\n\n"
+    "/historico [dias]\n\n"
+    "/perguntar <dúvida>\n\n"
+    "/cancelar\n\n"
+    "Planejamentos e sugestões só alteram a lista após sua confirmação."
 )
 
 
@@ -140,17 +146,10 @@ async def show_pantry(
         )
         return
 
-    lines = []
-    for item in pantry_items:
-        consumption = (
-            f"{_format_quantity(item.daily_consumption)} {item.unit}/dia"
-            if item.daily_consumption is not None
-            else "consumo não informado"
-        )
-        lines.append(
-            f"- {item.name}: {_format_quantity(item.quantity)} "
-            f"{item.unit}; consumo: {consumption}"
-        )
+    lines = [
+        f"- {item.name}: {_format_quantity(item.quantity)} {item.unit}"
+        for item in pantry_items
+    ]
     await update.message.reply_text(
         "🧺 Sua despensa\n\n" + "\n".join(lines)
     )

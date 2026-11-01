@@ -36,7 +36,7 @@ O `/start` abre um menu persistente:
 | Botão | O que faz |
 |---|---|
 | **Lista** | Mostra os itens que você pretende comprar. |
-| **Despensa** | Consulta seus itens, estoques e consumos cadastrados. |
+| **Despensa** | Consulta seus itens e quantidades em estoque. |
 | **Planejar (7 dias)** | Estima o que pode faltar na próxima semana. |
 | **Ajuda** | Mostra atalhos e instruções. |
 

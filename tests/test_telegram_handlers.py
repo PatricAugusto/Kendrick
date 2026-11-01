@@ -82,6 +82,12 @@ def test_help_lists_commands_in_concise_categories() -> None:
     assert "/perguntar" in response
     assert "/remover_despensa" in response
     assert "/cancelar" in response
+    assert (
+        "/estoque <item> <quantidade> <unidade>\n\n"
+        "/consumo <item> <quantidade> <unidade>/dia\n\n"
+        "/usei <item> <quantidade>"
+    ) in response
+    assert "/comprado <item> <quantidade>\n\n/planejar <dias>" in response
     assert "só alteram a lista após sua confirmação" in response
     assert reply_text.await_args.kwargs["reply_markup"] is MAIN_MENU_KEYBOARD
 
@@ -532,7 +538,7 @@ def test_stock_plan_purchase_and_history_end_to_end(tmp_path) -> None:
     shopping.mark_purchased(123456, "arroz", Decimal("0.5"))
     assert len(shopping.get_history(123456)) == 1
 
-def test_show_pantry_displays_stock_and_consumption() -> None:
+def test_show_pantry_displays_stock_without_consumption() -> None:
     store = Mock()
     store.get_items.return_value = [
         PantryItem(
@@ -556,8 +562,8 @@ def test_show_pantry_displays_stock_and_consumption() -> None:
     store.get_items.assert_called_once_with(123456)
     reply_text.assert_awaited_once_with(
         "🧺 Sua despensa\n\n"
-        "- arroz: 2.5 kg; consumo: 0.1 kg/dia\n"
-        "- leite: 1 L; consumo: consumo não informado"
+        "- arroz: 2.5 kg\n"
+        "- leite: 1 L"
     )
 
 
@@ -855,7 +861,7 @@ def test_pantry_command_handlers_persist_data_end_to_end(tmp_path) -> None:
     stock_reply.assert_awaited_once()
     consumption_reply.assert_awaited_once()
     pantry_reply.assert_awaited_once_with(
-        "🧺 Sua despensa\n\n- arroz: 2.5 kg; consumo: 0.1 kg/dia"
+        "🧺 Sua despensa\n\n- arroz: 2.5 kg"
     )
 
 
