@@ -1,140 +1,108 @@
-# Bot de compras no Telegram
+# Kendrick
 
-## Estrutura
+Assistente pessoal de compras no Telegram. Organize sua lista e despensa,
+acompanhe o que está acabando e planeje reposições — com confirmações antes de
+alterar a lista.
 
-```text
-kendrick_bot/
-  config.py                 # lê e valida as configurações
-  llm/ollama.py             # consulta um modelo local via Ollama
-  shopping/pantry_store.py  # persiste estoque e consumo da despensa
-  telegram/
-    application.py          # monta a aplicação e registra comandos
-    handlers.py             # avalia itens e responde às mensagens
-  __main__.py               # ponto de entrada do processo
-tests/                      # testes unitários, sem chamadas à API do Telegram
+## Comece aqui
+
+### 1. Prepare o bot no Telegram
+
+1. Crie um bot com o [@BotFather](https://t.me/BotFather) e copie o token.
+2. Descubra seu ID numérico do Telegram. Somente os IDs configurados poderão
+   usar o Kendrick.
+
+### 2. Configure e inicie
+
+No Windows, dê duplo clique em `iniciar-kendrick.bat`. Na primeira execução,
+ele prepara o ambiente e cria o arquivo `.env` a partir do exemplo. Preencha
+nele o token e seu ID:
+
+```dotenv
+TELEGRAM_BOT_TOKEN=seu_token
+TELEGRAM_ALLOWED_USER_IDS=123456789
 ```
 
-As dependências seguem separadas por finalidade: `requirements.txt` contém o
-necessário para executar o bot; `requirements-dev.txt` adiciona o pytest.
+Salve o arquivo e execute `iniciar-kendrick.bat` novamente. Quando o bot
+conectar, abra a conversa no Telegram e envie `/start`.
 
-## Avaliar itens
+Para autorizar mais pessoas, separe os IDs por vírgula. Não compartilhe o
+token: ele permite controlar o bot.
 
-Envie o nome de um item, por exemplo `tomates`. O Kendrick perguntará, em
-sequência, o estoque atual, o consumo por dia e em quantos dias será a próxima
-compra. Use a mesma unidade nas quantidades (por exemplo, unidades ou kg).
-Com esses dados, ele estima o consumo até a compra e a quantidade que faltará.
-Se houver falta, pede confirmação antes de adicionar essa quantidade à lista.
-Use `/lista` para consultar os itens e quantidades. Quando comprar parte ou
-toda a quantidade de um item, use `/comprado <item> <quantidade>` (por exemplo,
-`/comprado tomates 2`); nomes com espaços são aceitos, e quantidades decimais
-podem usar vírgula. O Kendrick desconta a quantidade comprada e remove o item
-quando não houver saldo restante. Não é possível registrar uma quantidade maior
-que a da lista. Use `/cancelar` para interromper uma análise.
+## Use pelo menu
 
-Ao executar `/start`, o Kendrick mostra um menu persistente para abrir a lista,
-a despensa, planejar os próximos 7 dias ou consultar a ajuda. Os comandos
-detalhados continuam disponíveis para ações específicas, como atualizar
-estoque ou registrar uma compra; `/ajuda` mostra esses atalhos. As confirmações
-de análise, planejamento e sugestões oferecem botões para aprovar ou recusar;
-também é possível responder Sim ou Não por texto.
-Use `/kendrickindica <pedido>` para receber sugestões personalizadas para uma
-ocasião, como `/kendrickindica jantar para 4 pessoas no fim de semana`. O
-Kendrick considera o pedido, a despensa e a lista atual; as sugestões só são
-incluídas na lista após confirmação. Esse comando usa o modelo local via Ollama.
-Para dúvidas e
-sugestões sobre compras, use `/perguntar <dúvida>`; por exemplo,
-`/perguntar como organizar as compras da semana?`. As respostas são geradas por
-um modelo local via Ollama. `/perguntar` continua sendo um assistente de dúvidas
-e não consulta nem altera sua lista ou seu estoque.
+O `/start` abre um menu persistente:
 
-## Despensa pessoal
+| Botão | O que faz |
+|---|---|
+| **Lista** | Mostra os itens que você pretende comprar. |
+| **Despensa** | Consulta seus itens, estoques e consumos cadastrados. |
+| **Planejar (7 dias)** | Estima o que pode faltar na próxima semana. |
+| **Ajuda** | Mostra atalhos e instruções. |
 
-Cadastre ou atualize o estoque atual com `/estoque <item> <quantidade>
-<unidade>`, por exemplo `/estoque arroz integral 2,5 kg`. O nome pode ter
-espaços e o estoque pode ser zero. Registre o consumo habitual diário com
-`/consumo <item> <quantidade> <unidade>/dia`, por exemplo
-`/consumo arroz integral 0,1 kg/dia`; primeiro, o item precisa existir na
-despensa. A unidade do consumo deve corresponder à unidade do estoque.
+Você também pode enviar o nome de um item, como `tomates`. O Kendrick pergunta
+o estoque atual, o consumo diário e quando será a próxima compra; se houver
+falta, propõe a quantidade a adicionar. Responda usando os botões ou escreva
+Sim/Não. A lista só muda após sua confirmação.
 
-Use `/despensa` para consultar os itens, estoque e consumo cadastrado. Use
-`/prioridades` para ordenar os itens com consumo conhecido pelo tempo estimado
-até o estoque acabar; itens sem consumo ficam em uma seção separada. Registre
-uma retirada com `/usei <item> <quantidade>`, por exemplo
-`/usei arroz integral 0,2`. O comando usa a unidade cadastrada na despensa,
-atualiza o estoque imediatamente e não permite retirar mais do que há disponível.
-Um estoque zerado permanece cadastrado para que você possa atualizá-lo depois
-com `/estoque`. Use `/remover_despensa <item> confirmar` para excluir um
-registro após confirmação;
-isso não remove nem altera o item correspondente na lista de compras. Para
-trocar a unidade de um item, remova-o da despensa e cadastre-o novamente,
-incluindo o consumo habitual.
-Esses registros são persistidos no banco local e isolados por usuário do
-Telegram.
+## Atalhos
 
-## Planejar idas ao mercado e consultar compras
+Use `/ajuda` no Telegram para consultar as instruções. Os principais comandos
+são:
 
-Use `/planejar <dias>` (de 1 a 365) para estimar quais itens cadastrados devem
-faltar dentro do período, considerando estoque e consumo diário. O Kendrick
-mostra os itens sem consumo cadastrado, mas não inventa uma estimativa para
-eles. As faltas sugeridas só entram na lista depois de uma confirmação Sim;
-responder Não ou usar `/cancelar` não altera a lista. Os itens planejados levam
-a unidade da despensa para a lista, e quantidades com unidade incompatível não
-são somadas.
+| Comando | Exemplo | Ação |
+|---|---|---|
+| `/estoque` | `/estoque arroz integral 2,5 kg` | Cadastra ou atualiza o estoque. |
+| `/consumo` | `/consumo arroz integral 0,1 kg/dia` | Define o consumo diário de um item da despensa. |
+| `/usei` | `/usei arroz integral 0,2` | Registra o consumo e desconta do estoque. |
+| `/planejar` | `/planejar 14` | Prevê reposições para até 365 dias. |
+| `/comprado` | `/comprado tomates 2` | Registra uma compra e desconta da lista. |
+| `/kendrickindica` | `/kendrickindica jantar para 4 pessoas` | Sugere itens para uma ocasião; pede confirmação antes de incluí-los. |
+| `/prioridades` | `/prioridades` | Ordena itens pelo tempo estimado até o estoque acabar. |
+| `/historico` | `/historico 30` | Exibe até 20 compras registradas no período escolhido. |
+| `/remover_despensa` | `/remover_despensa arroz confirmar` | Remove um item da despensa, sem alterar a lista. |
+| `/perguntar` | `/perguntar como organizar as compras?` | Responde dúvidas gerais sobre compras. |
+| `/cancelar` | `/cancelar` | Interrompe uma análise ou confirmação pendente. |
 
-Use `/historico` para ver as até 20 compras mais recentes marcadas nos últimos
-30 dias, ou `/historico <dias>` para escolher um período de 1 a 365 dias. O
-registro é criado quando `/comprado <item> <quantidade>` desconta com sucesso
-um item da lista; tentativas inválidas não entram no histórico. Data e horário
-são apresentados em UTC. Para que o estoque atual reflita a compra, atualize-o
-separadamente com `/estoque <item> <quantidade> <unidade>`; marcar como comprado
-não altera automaticamente a despensa.
+Use a mesma unidade para o estoque e o consumo, como `kg`. Quantidades decimais
+aceitam vírgula ou ponto. Marcar um item como comprado não atualiza a despensa:
+use `/estoque` para informar o novo saldo.
 
-`/planejar <dias>` calcula reposições usando o consumo e o estoque cadastrados.
-Já `/kendrickindica <pedido>` gera ideias contextuais com o modelo local, usando
-a despensa e a lista atual como referência; revise e confirme as sugestões antes
-de adicioná-las. Nenhum desses comandos altera a lista sem confirmação.
+## Sugestões com Ollama (opcional)
 
-Instale o Ollama na máquina que executa o bot, inicie o serviço e baixe um
-modelo, por exemplo, no PowerShell:
+O Ollama habilita `/kendrickindica` e `/perguntar`; os demais recursos funcionam
+sem ele. Instale e inicie o [Ollama](https://ollama.com/) no computador que
+executa o Kendrick e baixe um modelo:
 
 ```powershell
 ollama pull llama3.2
 ```
 
-`OLLAMA_BASE_URL` e `OLLAMA_MODEL` são configurações opcionais no `.env`; por
-padrão, o Kendrick usa `http://localhost:11434` e `llama3.2`. Se o Ollama
-estiver indisponível, os outros comandos do bot continuam funcionando e
-`/perguntar` e `/kendrickindica` informam que não conseguiram obter resposta.
+Por padrão, o Kendrick usa `http://localhost:11434` e o modelo `llama3.2`.
+Para alterar, configure `OLLAMA_BASE_URL` ou `OLLAMA_MODEL` no `.env`.
 
-A análise em andamento fica somente na memória do processo e é apagada quando o
-bot é reiniciado. A lista de compras é salva localmente no arquivo
-`kendrick.sqlite3`, na pasta do projeto, e continua disponível após reiniciar o
-bot. Cada usuário autorizado tem sua própria lista; para removê-la, apague o
-arquivo com o bot parado.
+## Dados e privacidade
 
-## Executar e testar
+- O bot aceita apenas mensagens privadas de usuários listados em
+  `TELEGRAM_ALLOWED_USER_IDS`.
+- A lista, a despensa e o histórico são guardados localmente em
+  `kendrick.sqlite3`, separados por usuário.
+- Análises e confirmações pendentes ficam na memória e são perdidas quando o
+  processo é reiniciado.
+- O arquivo `.env` contém o token e não deve ser compartilhado. Ele é ignorado
+  pelo Git.
 
-Depois da configuração inicial, inicie o Kendrick com duplo clique em
-`iniciar-kendrick.bat`. O atalho prepara o ambiente virtual e instala as
-dependências de execução se necessário. Se `.env` ainda não existir, ele cria
-uma cópia de `.env.example` e abre o arquivo para configuração.
+## Testes e execução pelo terminal
 
-1. Crie um bot no Telegram conversando com o `@BotFather` e copie o token.
-2. Descubra seu ID numérico do Telegram (por exemplo, consultando um bot de
-   informações de perfil) e use somente IDs das pessoas que terão acesso.
-3. Na pasta do projeto, copie `.env.example` para `.env`, coloque o token em
-   `TELEGRAM_BOT_TOKEN` e seu ID em `TELEGRAM_ALLOWED_USER_IDS`. Para mais de
-   uma pessoa autorizada, separe os IDs por vírgula.
-4. Instale as dependências de desenvolvimento, incluindo as do bot e o pytest:
-   `python -m pip install -r requirements-dev.txt`.
-5. Rode os testes unitários: `python -m pytest -q`.
-6. Alternativamente ao atalho, inicie o bot com
-   `.\.venv\Scripts\python.exe -m kendrick_bot`.
-7. Abra a conversa com seu bot no Telegram e envie `/start`.
+Com o Python 3.10 ou superior instalado, abra o PowerShell na pasta do projeto.
+O atalho é a forma mais simples de iniciar; se preferir, use:
 
-O arquivo `.env` contém um segredo e é ignorado pelo Git. Não compartilhe nem
-publique seu token. O bot só aceita mensagens privadas dos IDs autorizados; os
-demais usuários não podem acessar comandos, análises ou lista de compras. Sem
-uma lista válida em `TELEGRAM_ALLOWED_USER_IDS`, o bot não inicia. O token é
-redigido dos logs, e os logs informativos do `httpx` (que incluem a URL da API)
-são suprimidos.
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+.\.venv\Scripts\python.exe -m pytest -q
+.\.venv\Scripts\python.exe -m kendrick_bot
+```
+
+`requirements.txt` contém as dependências para executar o bot; `requirements-dev.txt`
+inclui também as ferramentas de teste.
