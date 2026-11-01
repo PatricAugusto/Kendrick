@@ -8,6 +8,7 @@ from telegram import (
     Chat,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
+    ReplyKeyboardMarkup,
     Message,
     Update,
 )
@@ -40,27 +41,32 @@ PANTRY_STORE_KEY = "pantry_store"
 PENDING_PLAN_KEY = "pending_purchase_plan"
 PENDING_SUGGESTIONS_KEY = "pending_purchase_suggestions"
 AUTHORIZED_USER_IDS_KEY = "authorized_user_ids"
+MENU_LIST = "🛒 Lista"
+MENU_PANTRY = "🧺 Despensa"
+MENU_PLAN = "📅 Planejar (7 dias)"
+MENU_HELP = "❓ Ajuda"
+MAIN_MENU_KEYBOARD = ReplyKeyboardMarkup(
+    [
+        [MENU_LIST, MENU_PANTRY],
+        [MENU_PLAN, MENU_HELP],
+    ],
+    resize_keyboard=True,
+    is_persistent=True,
+    input_field_placeholder="Escolha uma ação ou envie um item",
+)
 HELP_TEXT = (
-    "Comandos do Kendrick\n\n"
-    "DESPENSA\n"
-    "/despensa — consultar seus itens e estoques.\n"
-    "/estoque <item> <quantidade> <unidade> — atualizar estoque.\n"
-    "/consumo <item> <quantidade> <unidade>/dia — informar consumo diário.\n"
-    "/usei <item> <quantidade> — registrar uma retirada.\n"
-    "/remover_despensa <item> confirmar — remover um item.\n\n"
-    "COMPRAS\n"
-    "/lista — consultar sua lista.\n"
-    "/comprado <item> <quantidade> — registrar uma compra.\n"
-    "/planejar <dias> — prever o que pode faltar.\n"
-    "/kendrickindica <pedido> — montar sugestões para sua lista.\n"
-    "/prioridades — ver o que deve acabar primeiro.\n"
-    "/historico [dias] — consultar compras (padrão: 30 dias).\n\n"
-    "AJUDA\n"
-    "/perguntar <dúvida> — pedir uma sugestão.\n"
-    "/cancelar — interromper o fluxo atual.\n\n"
-    "Para analisar um item, envie o nome dele na conversa. "
-    "Use a mesma unidade no estoque e no consumo (por exemplo, kg). "
-    "Sugestões de planejamento só entram na lista com sua confirmação."
+    "Como posso ajudar?\n\n"
+    "Use os botões para abrir sua lista, despensa ou planejar os próximos "
+    "7 dias. Envie o nome de um item para estimar a reposição.\n\n"
+    "Para atualizar dados:\n"
+    "• Despensa: /estoque <item> <quantidade> <unidade>, "
+    "/consumo <item> <quantidade> <unidade>/dia ou /usei <item> <quantidade>.\n"
+    "• Compras: /comprado <item> <quantidade>, "
+    "/planejar <dias> ou /kendrickindica <pedido>.\n"
+    "• Outras opções: /prioridades, /historico, /perguntar e "
+    "/remover_despensa.\n"
+    "Use /cancelar para interromper um fluxo. Planejamentos e sugestões só "
+    "alteram a lista após sua confirmação."
 )
 
 
@@ -98,12 +104,10 @@ async def start(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
 
     await update.message.reply_text(
         "Oi! Sou o Kendrick 👋\n"
-        "Vamos simplificar suas compras.\n\n"
-        "• Envie o nome de um item para estimar o que pode faltar.\n"
-        "• Use /kendrickindica para montar uma lista para uma ocasião.\n"
-        "• Use /lista para ver suas compras.\n"
-        "• Use /despensa para consultar seu estoque.\n\n"
-        "Envie /ajuda para ver todos os comandos."
+        "Vamos simplificar sua rotina.\n\n"
+        "Escolha uma opção no menu abaixo ou envie o nome de um item para "
+        "estimar o que pode faltar.",
+        reply_markup=MAIN_MENU_KEYBOARD,
     )
 
 
@@ -111,7 +115,10 @@ async def show_help(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
     if update.message is None:
         return
 
-    await update.message.reply_text(HELP_TEXT)
+    await update.message.reply_text(
+        HELP_TEXT,
+        reply_markup=MAIN_MENU_KEYBOARD,
+    )
 
 
 async def show_pantry(
@@ -278,6 +285,17 @@ async def plan_purchases(
         await update.message.reply_text(
             "Informe um período inteiro entre 1 e 365 dias."
         )
+        return
+
+    await _plan_purchases_for_days(update, context, days)
+
+
+async def _plan_purchases_for_days(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    days: int,
+) -> None:
+    if update.message is None:
         return
 
     user = update.effective_user
@@ -765,6 +783,19 @@ async def answer_item_check(
     text = update.message.text.strip()
     if not text:
         await update.message.reply_text("Envie o nome de um item para analisar.")
+        return
+
+    if text == MENU_LIST:
+        await show_list(update, context)
+        return
+    if text == MENU_PANTRY:
+        await show_pantry(update, context)
+        return
+    if text == MENU_PLAN:
+        await _plan_purchases_for_days(update, context, 7)
+        return
+    if text == MENU_HELP:
+        await show_help(update, context)
         return
 
     pending_suggestions = context.user_data.get(PENDING_SUGGESTIONS_KEY)

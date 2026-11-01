@@ -12,6 +12,11 @@ from kendrick_bot.shopping.pantry_store import PantryStore
 from kendrick_bot.shopping.list_store import ShoppingListStore
 from kendrick_bot.telegram.handlers import (
     AUTHORIZED_USER_IDS_KEY,
+    MAIN_MENU_KEYBOARD,
+    MENU_HELP,
+    MENU_LIST,
+    MENU_PANTRY,
+    MENU_PLAN,
     OLLAMA_CLIENT_KEY,
     PANTRY_STORE_KEY,
     PENDING_ANALYSIS_KEY,
@@ -51,11 +56,9 @@ def test_start_gives_a_short_welcome_and_points_to_help() -> None:
     reply_text.assert_awaited_once()
     response = reply_text.await_args.args[0]
     assert response.startswith("Oi! Sou o Kendrick")
-    assert "Vamos simplificar suas compras." in response
-    assert "Envie o nome de um item" in response
-    assert "Use /lista" in response
-    assert "Use /despensa" in response
-    assert "/ajuda" in response
+    assert "Vamos simplificar sua rotina." in response
+    assert "Escolha uma opção no menu" in response
+    assert reply_text.await_args.kwargs["reply_markup"] is MAIN_MENU_KEYBOARD
     assert "COMPRAS" not in response
     assert "/comprado" not in response
 
@@ -67,24 +70,20 @@ def test_help_lists_commands_in_concise_categories() -> None:
 
     reply_text.assert_awaited_once()
     response = reply_text.await_args.args[0]
-    assert "Comandos do Kendrick" in response
-    assert "DESPENSA" in response
-    assert "COMPRAS" in response
-    assert "AJUDA" in response
-    assert "/perguntar <dúvida> —" in response
-    assert "/lista —" in response
-    assert "/comprado <item> <quantidade> —" in response
-    assert "/despensa —" in response
-    assert "/estoque <item> <quantidade> <unidade> —" in response
-    assert "/consumo <item> <quantidade> <unidade>/dia —" in response
-    assert "/usei <item> <quantidade> —" in response
-    assert "/remover_despensa <item> confirmar —" in response
-    assert "/planejar <dias> —" in response
-    assert "/kendrickindica <pedido> —" in response
-    assert "/prioridades —" in response
-    assert "/historico [dias] —" in response
-    assert "/cancelar —" in response
-    assert "Sugestões de planejamento só entram na lista com sua confirmação." in response
+    assert "Use os botões" in response
+    assert "/estoque <item> <quantidade> <unidade>" in response
+    assert "/consumo <item> <quantidade> <unidade>/dia" in response
+    assert "/usei <item> <quantidade>" in response
+    assert "/comprado <item> <quantidade>" in response
+    assert "/planejar <dias>" in response
+    assert "/kendrickindica <pedido>" in response
+    assert "/prioridades" in response
+    assert "/historico" in response
+    assert "/perguntar" in response
+    assert "/remover_despensa" in response
+    assert "/cancelar" in response
+    assert "só alteram a lista após sua confirmação" in response
+    assert reply_text.await_args.kwargs["reply_markup"] is MAIN_MENU_KEYBOARD
 
 
 def test_help_does_not_reply_when_update_has_no_message() -> None:
@@ -97,6 +96,64 @@ def test_start_does_not_reply_when_update_has_no_message() -> None:
     update = Mock(message=None)
 
     assert asyncio.run(start(update, Mock())) is None
+
+
+def test_menu_list_button_shows_shopping_list() -> None:
+    store = Mock()
+    store.get_items.return_value = [ShoppingListItem("arroz", Decimal("2"), "kg")]
+    update, reply_text = make_update(MENU_LIST)
+    context = Mock(
+        user_data={},
+        bot_data={SHOPPING_STORE_KEY: store},
+    )
+
+    asyncio.run(answer_item_check(update, context))
+
+    store.get_items.assert_called_once_with(123456)
+    assert "arroz: 2 kg" in reply_text.await_args.args[0]
+
+
+def test_menu_pantry_button_shows_pantry() -> None:
+    store = Mock()
+    store.get_items.return_value = [
+        PantryItem("arroz", Decimal("2"), "kg", Decimal("0.1"))
+    ]
+    update, reply_text = make_update(MENU_PANTRY)
+    context = Mock(
+        user_data={},
+        bot_data={PANTRY_STORE_KEY: store},
+    )
+
+    asyncio.run(answer_item_check(update, context))
+
+    store.get_items.assert_called_once_with(123456)
+    assert "arroz: 2 kg" in reply_text.await_args.args[0]
+
+
+def test_menu_plan_button_plans_for_seven_days() -> None:
+    pantry = Mock()
+    pantry.get_items.return_value = [
+        PantryItem("arroz", Decimal("1"), "kg", Decimal("0.5"))
+    ]
+    shopping = Mock()
+    update, reply_text = make_update(MENU_PLAN)
+    context = Mock(
+        user_data={},
+        bot_data={PANTRY_STORE_KEY: pantry, SHOPPING_STORE_KEY: shopping},
+    )
+
+    asyncio.run(answer_item_check(update, context))
+
+    assert "próximos 7 dias" in reply_text.await_args.args[0]
+    assert "arroz — 2.5 kg" in reply_text.await_args.args[0]
+
+
+def test_menu_help_button_shows_help() -> None:
+    update, reply_text = make_update(MENU_HELP)
+
+    asyncio.run(answer_item_check(update, Mock()))
+
+    assert "Como posso ajudar?" in reply_text.await_args.args[0]
 
 
 def make_update(text: str) -> tuple[Mock, AsyncMock]:

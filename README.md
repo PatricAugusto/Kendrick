@@ -31,10 +31,12 @@ podem usar vírgula. O Kendrick desconta a quantidade comprada e remove o item
 quando não houver saldo restante. Não é possível registrar uma quantidade maior
 que a da lista. Use `/cancelar` para interromper uma análise.
 
-Ao executar `/start`, o Kendrick mostra uma saudação com as ações mais comuns.
-Use `/ajuda` para consultar todos os comandos, organizados por despensa, compras
-e ajuda. As confirmações de análise, planejamento e sugestões oferecem botões
-para aprovar ou recusar; também é possível responder Sim ou Não por texto.
+Ao executar `/start`, o Kendrick mostra um menu persistente para abrir a lista,
+a despensa, planejar os próximos 7 dias ou consultar a ajuda. Os comandos
+detalhados continuam disponíveis para ações específicas, como atualizar
+estoque ou registrar uma compra; `/ajuda` mostra esses atalhos. As confirmações
+de análise, planejamento e sugestões oferecem botões para aprovar ou recusar;
+também é possível responder Sim ou Não por texto.
 Use `/kendrickindica <pedido>` para receber sugestões personalizadas para uma
 ocasião, como `/kendrickindica jantar para 4 pessoas no fim de semana`. O
 Kendrick considera o pedido, a despensa e a lista atual; as sugestões só são
@@ -112,6 +114,11 @@ arquivo com o bot parado.
 
 ## Executar e testar
 
+Depois da configuração inicial, inicie o Kendrick com duplo clique em
+`iniciar-kendrick.bat`. O atalho prepara o ambiente virtual e instala as
+dependências de execução se necessário. Se `.env` ainda não existir, ele cria
+uma cópia de `.env.example` e abre o arquivo para configuração.
+
 1. Crie um bot no Telegram conversando com o `@BotFather` e copie o token.
 2. Descubra seu ID numérico do Telegram (por exemplo, consultando um bot de
    informações de perfil) e use somente IDs das pessoas que terão acesso.
@@ -121,7 +128,8 @@ arquivo com o bot parado.
 4. Instale as dependências de desenvolvimento, incluindo as do bot e o pytest:
    `python -m pip install -r requirements-dev.txt`.
 5. Rode os testes unitários: `python -m pytest -q`.
-6. Inicie o bot: `python -m kendrick_bot`.
+6. Alternativamente ao atalho, inicie o bot com
+   `.\.venv\Scripts\python.exe -m kendrick_bot`.
 7. Abra a conversa com seu bot no Telegram e envie `/start`.
 
 O arquivo `.env` contém um segredo e é ignorado pelo Git. Não compartilhe nem
